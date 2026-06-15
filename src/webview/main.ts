@@ -18,9 +18,17 @@ type StoreState = {
   statusBar: StatusBar;
   spinner: { active: boolean; label: string } | null;
   pendingApproval: { approvalId: string; runId: string; command: string; kind?: string } | null;
+  planReadyProposal: {
+    planId: string;
+    runId: string;
+    objective: string;
+    steps: Array<{ title: string; description: string; filesLikely: string[]; subagentEligible?: boolean }>;
+    scopeNotes?: string;
+  } | null;
 };
 
 type Controls = {
+  mode: "auto" | "plan";
   model: string;
   effort: string | null;
   provider: "openai" | "anthropic";
@@ -39,6 +47,8 @@ type VsCodeApi = {
     | { type: "setModel"; model: string }
     | { type: "setEffort"; effort: string }
     | { type: "approveCommand"; approvalId: string; runId: string; approved: boolean }
+    | { type: "setMode"; mode: "auto" | "plan" }
+    | { type: "planDecision"; planId: string; runId: string; decision: string; feedback?: string }
   ): void;
 };
 
@@ -66,6 +76,18 @@ const approvalPrompt     = document.querySelector<HTMLDivElement>("#approval-pro
 const approvalCommandEl  = document.querySelector<HTMLElement>("#approval-command")        as HTMLElement;
 const approvalApproveBtn = document.querySelector<HTMLButtonElement>("#approval-approve") as HTMLButtonElement;
 const approvalDenyBtn    = document.querySelector<HTMLButtonElement>("#approval-deny")    as HTMLButtonElement;
+const modeBtn        = document.querySelector<HTMLButtonElement>("#mode-btn")          as HTMLButtonElement;
+const modeLabel      = document.querySelector<HTMLSpanElement>("#mode-label")          as HTMLSpanElement;
+const planReadyEl    = document.querySelector<HTMLDivElement>("#plan-ready")           as HTMLDivElement;
+const planObjEl      = document.querySelector<HTMLDivElement>("#plan-ready-objective") as HTMLDivElement;
+const planStepsEl    = document.querySelector<HTMLOListElement>("#plan-ready-steps")   as HTMLOListElement;
+const planScopeEl    = document.querySelector<HTMLDivElement>("#plan-ready-scope")     as HTMLDivElement;
+const planFeedbackEl = document.querySelector<HTMLTextAreaElement>("#plan-feedback")   as HTMLTextAreaElement;
+const planBtnAccept    = document.querySelector<HTMLButtonElement>("#plan-btn-accept")       as HTMLButtonElement;
+const planBtnManual    = document.querySelector<HTMLButtonElement>("#plan-btn-manual")       as HTMLButtonElement;
+const planBtnFeedback  = document.querySelector<HTMLButtonElement>("#plan-btn-feedback")     as HTMLButtonElement;
+const planBtnFbRun     = document.querySelector<HTMLButtonElement>("#plan-btn-feedback-run") as HTMLButtonElement;
+const planBtnReject    = document.querySelector<HTMLButtonElement>("#plan-btn-reject")       as HTMLButtonElement;
 
 if (!transcriptEl || !promptInput) {
   throw new Error("Zone webview failed to initialize");
@@ -76,6 +98,8 @@ if (!transcriptEl || !promptInput) {
 let activeDropdown: HTMLDivElement | null = null;
 let currentControls: Controls | null = null;
 let currentPending: { approvalId: string; runId: string; command: string } | null = null;
+let currentMode: "auto" | "plan" = "auto";
+let currentPlanReady: { planId: string; runId: string } | null = null;
 
 function toggleDropdown(dd: HTMLDivElement): void {
   if (activeDropdown && activeDropdown !== dd) activeDropdown.classList.remove("open");
@@ -109,16 +133,47 @@ approvalDenyBtn.addEventListener("click", () => {
   vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
 });
 document.addEventListener("keydown", (e) => {
-  if (!currentPending) return;
   if (e.key === "Escape") {
-    vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
+    if (currentPending) {
+      vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
+    } else if (currentPlanReady) {
+      sendPlanDecision("reject");
+    }
   } else if (e.key === "Enter" && !e.shiftKey && document.activeElement !== promptInput) {
-    e.preventDefault();
-    vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true });
+    if (currentPending) {
+      e.preventDefault();
+      vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true });
+    }
   }
 });
 
+function sendPlanDecision(decision: string): void {
+  if (!currentPlanReady) return;
+  const feedback = planFeedbackEl.value.trim() || undefined;
+  vscode.postMessage({
+    type: "planDecision",
+    planId: currentPlanReady.planId,
+    runId: currentPlanReady.runId,
+    decision,
+    ...(feedback ? { feedback } : {}),
+  });
+}
+planBtnAccept.addEventListener("click", () => sendPlanDecision("accept_all"));
+planBtnManual.addEventListener("click", () => sendPlanDecision("manual"));
+planBtnFeedback.addEventListener("click", () => sendPlanDecision("feedback"));
+planBtnFbRun.addEventListener("click", () => sendPlanDecision("approve_with_feedback"));
+planBtnReject.addEventListener("click", () => sendPlanDecision("reject"));
+
 promptInput.addEventListener("keydown", (event) => {
+  if (event.key === "Tab" && event.shiftKey) {
+    event.preventDefault();
+    const next: "auto" | "plan" = currentMode === "auto" ? "plan" : "auto";
+    currentMode = next;
+    modeLabel.textContent = next;
+    modeBtn.dataset["mode"] = next;
+    vscode.postMessage({ type: "setMode", mode: next });
+    return;
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     const text = promptInput.value.trim();
@@ -141,6 +196,10 @@ window.addEventListener("message", (event: MessageEvent<StateMessage | ControlsM
 function renderControls(c: Controls): void {
   currentControls = c;
   if (activeDropdown) { activeDropdown.classList.remove("open"); activeDropdown = null; }
+
+  currentMode = c.mode;
+  modeLabel.textContent = c.mode;
+  modeBtn.dataset["mode"] = c.mode;
 
   modelLabel.textContent = c.model;
   providerLabel.textContent = c.provider;
@@ -239,6 +298,33 @@ function renderState(state: StoreState): void {
     approvalPrompt.style.display = "block";
   } else {
     approvalPrompt.style.display = "none";
+  }
+
+  currentPlanReady = state.planReadyProposal
+    ? { planId: state.planReadyProposal.planId, runId: state.planReadyProposal.runId }
+    : null;
+  if (state.planReadyProposal) {
+    const p = state.planReadyProposal;
+    planObjEl.textContent = p.objective;
+    planStepsEl.innerHTML = "";
+    p.steps.forEach((s, i) => {
+      const li = mkEl("li", "plan-step");
+      li.append(mkEl("span", "plan-step-num", `${i + 1}.`));
+      const body = mkEl("span");
+      body.append(mkEl("span", "plan-step-title", s.title));
+      if (s.description) body.append(mkEl("span", "plan-step-desc", ` — ${s.description}`));
+      li.append(body);
+      planStepsEl.append(li);
+    });
+    if (p.scopeNotes) {
+      planScopeEl.textContent = p.scopeNotes;
+      planScopeEl.hidden = false;
+    } else {
+      planScopeEl.hidden = true;
+    }
+    planReadyEl.style.display = "block";
+  } else {
+    planReadyEl.style.display = "none";
   }
 }
 

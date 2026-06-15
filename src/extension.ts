@@ -5,13 +5,16 @@ import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
 import type { CliConfig } from "zone/config";
 import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
 import { reducer, buildInitialState } from "zone/store-core";
-import { resolveCommandApproval } from "zone/approvals";
+import { resolveCommandApproval, resolvePlanApproval, type PlanDecision } from "zone/approvals";
 import type { StoreState, StoreAction } from "zone/store-core";
 import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/lifecycle";
 import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLevel } from "zone/model-registry";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentApply: ((action: StoreAction) => void) | null = null;
+
+type Mode = "auto" | "plan";
+let currentMode: Mode = "auto";
 
 export function activate(context: vscode.ExtensionContext): void {
   const disposable = vscode.commands.registerCommand('zone.openPanel', () => {
@@ -31,7 +34,7 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
 
     panel.webview.onDidReceiveMessage(
-      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean }) => {
+      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; mode?: string; planId?: string; decision?: string; feedback?: string }) => {
         if (message.type === "prompt" && typeof message.text === "string") {
           const text = message.text.trim();
           if (text) void runPrompt(panel, text, context);
@@ -53,6 +56,17 @@ export function activate(context: vscode.ExtensionContext): void {
         } else if (message.type === "approveCommand" && message.approvalId && message.runId) {
           resolveCommandApproval({ approvalId: message.approvalId, runId: message.runId, approved: !!message.approved });
           currentApply?.({ type: "PENDING_APPROVAL_RESOLVED" });
+        } else if (message.type === "setMode" && message.mode) {
+          currentMode = message.mode as Mode;
+          void postControls(panel, context);
+        } else if (message.type === "planDecision" && message.planId && message.runId && message.decision) {
+          resolvePlanApproval({
+            planId: message.planId,
+            runId: message.runId,
+            decision: message.decision as PlanDecision,
+            ...(message.feedback ? { feedback: message.feedback } : {}),
+          });
+          currentApply?.({ type: "PLAN_READY_RESOLVED" });
         }
       },
       undefined,
@@ -121,6 +135,7 @@ async function postControls(
   void panel.webview.postMessage({
     type: "controls",
     controls: {
+      mode: currentMode,
       model,
       effort,
       provider,
@@ -196,7 +211,8 @@ async function runPrompt(
     if (
       t === "run_failed" || t === "agent_loop_complete" || t === "run_summary" ||
       t === "tool_call" || t === "phase_changed" ||
-      t === "edit_approval_required" || t === "trust_approval_required"
+      t === "edit_approval_required" || t === "trust_approval_required" ||
+      t === "plan_ready_for_approval"
     ) {
       flushBuffer();
       const { actions, intents } = eventToActions(evt, ctx);
@@ -227,7 +243,7 @@ async function runPrompt(
   const ac = new AbortController();
   const runId = randomUUID();
   try {
-    await runOneShotInner(text, config, runId, { externalAc: ac, onProgress, mode: "autoAccept" });
+    await runOneShotInner(text, config, runId, { externalAc: ac, onProgress, mode: currentMode === "plan" ? "plan" : "autoAccept" });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     route({ runId, ts: Date.now(), type: "narration", title: "run error",
@@ -482,6 +498,108 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       opacity: 0.7;
     }
 
+    /* ── Mode pill ───────────────────────────────────── */
+    #mode-btn[data-mode="plan"] {
+      border-color: #6366f1;
+      color: #818cf8;
+    }
+
+    /* ── Plan-ready panel ────────────────────────────── */
+    #plan-ready {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      background: #12121a;
+      padding: 12px;
+      display: none;
+      max-height: 50vh;
+      overflow-y: auto;
+    }
+
+    #plan-ready-header {
+      font-size: 11px;
+      font-weight: 600;
+      color: #818cf8;
+      letter-spacing: 0.08em;
+      margin-bottom: 6px;
+    }
+
+    #plan-ready-objective {
+      color: var(--text);
+      margin-bottom: 8px;
+      font-weight: 500;
+    }
+
+    #plan-ready-steps {
+      list-style: none;
+      padding: 0;
+      margin: 0 0 8px;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .plan-step {
+      display: flex;
+      gap: 8px;
+      font-size: 12px;
+    }
+
+    .plan-step-num   { color: #6366f1; flex-shrink: 0; }
+    .plan-step-title { color: var(--text); }
+    .plan-step-desc  { color: var(--muted); }
+
+    #plan-ready-scope {
+      font-size: 11px;
+      color: var(--muted);
+      font-style: italic;
+      margin-bottom: 8px;
+    }
+
+    #plan-feedback {
+      display: block;
+      width: 100%;
+      min-height: 40px;
+      max-height: 80px;
+      resize: vertical;
+      border: 1px solid var(--border);
+      outline: none;
+      padding: 6px 8px;
+      background: var(--bg);
+      color: var(--text);
+      font: 12px/1.4 var(--font);
+      border-radius: 2px;
+      margin-bottom: 8px;
+    }
+
+    #plan-feedback::placeholder { color: var(--muted); }
+    #plan-feedback:focus { border-color: var(--muted); }
+
+    #plan-ready-actions {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 6px;
+    }
+
+    .plan-btn {
+      font: 11px/1 var(--font);
+      padding: 5px 10px;
+      border-radius: 3px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      background: none;
+      color: var(--text);
+    }
+    .plan-btn:hover { border-color: var(--muted); }
+    .plan-btn.primary {
+      background: linear-gradient(90deg,#6366f1,#a855f7);
+      border-color: transparent;
+      color: #fff;
+      font-weight: 600;
+    }
+    .plan-btn.primary:hover { filter: brightness(1.12); }
+    .plan-btn.danger { color: var(--muted); }
+    .plan-btn.danger:hover { color: #f87171; border-color: #f87171; }
+
     /* ── Status strip ────────────────────────────────── */
     #status-strip {
       display: flex;
@@ -615,6 +733,11 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
           </button>
           <div class="dropdown" id="model-dropdown"></div>
         </div>
+        <div class="ctrl" id="mode-ctrl">
+          <button class="ctrl-btn" id="mode-btn" type="button" data-mode="auto">
+            <span id="mode-label">auto</span>
+          </button>
+        </div>
         <div class="ctrl" id="effort-ctrl" hidden>
           <button class="ctrl-btn" id="effort-btn" type="button">
             <span id="effort-label">effort</span>
@@ -637,6 +760,20 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       </span>
       <span id="status-text"></span>
     </div>
+    <div id="plan-ready">
+      <div id="plan-ready-header">⬡ Plan ready</div>
+      <div id="plan-ready-objective"></div>
+      <ol id="plan-ready-steps"></ol>
+      <div id="plan-ready-scope" hidden></div>
+      <textarea id="plan-feedback" placeholder="Feedback (for options 3 + 4)…"></textarea>
+      <div id="plan-ready-actions">
+        <button type="button" class="plan-btn primary" id="plan-btn-accept">auto-accept all</button>
+        <button type="button" class="plan-btn" id="plan-btn-manual">manually approve</button>
+        <button type="button" class="plan-btn" id="plan-btn-feedback">give feedback</button>
+        <button type="button" class="plan-btn" id="plan-btn-feedback-run">feedback+run</button>
+        <button type="button" class="plan-btn danger" id="plan-btn-reject">cancel [Esc]</button>
+      </div>
+    </div>
     <div id="approval-prompt">
       <span id="approval-label">⚠ Approve command?</span>
       <code id="approval-command"></code>
@@ -646,7 +783,7 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       </div>
     </div>
     <form id="prompt-bar">
-      <textarea id="prompt" rows="2" placeholder="Type a prompt, Enter to send, Shift+Enter for newline"></textarea>
+      <textarea id="prompt" rows="2" placeholder="Type a prompt · Enter to send · Shift+Enter newline · Shift+Tab: mode"></textarea>
     </form>
   </main>
   <script nonce="${nonce}" src="${scriptUri}"></script>
