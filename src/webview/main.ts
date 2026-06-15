@@ -55,6 +55,9 @@ type VsCodeApi = {
 
 declare const acquireVsCodeApi: () => VsCodeApi;
 
+const DIFF_TOOLS = new Set(["apply_patch", "write_file", "multi_edit"]);
+const WRITE_FILE_PREVIEW_LINES = 7;
+
 const vscode = acquireVsCodeApi();
 const transcriptEl = document.querySelector<HTMLDivElement>("#transcript") as HTMLDivElement;
 const promptInput = document.querySelector<HTMLTextAreaElement>("#prompt") as HTMLTextAreaElement;
@@ -343,7 +346,7 @@ function renderState(state: StoreState): void {
   }
 }
 
-function renderDiff(patch: string, container: HTMLElement): void {
+function renderDiff(patch: string, container: HTMLElement, maxLines = 20): void {
   container.innerHTML = "";
   const FIND_M = "--- FIND ---";
   const REPL_M = "--- REPLACE ---";
@@ -364,7 +367,7 @@ function renderDiff(patch: string, container: HTMLElement): void {
     replLines.forEach((l) => allLines.push({ kind: "add", text: l }));
   });
   if (allLines.length === 0) return;
-  const MAX = 20;
+  const MAX = maxLines;
   let contentCount = 0, cutIdx = allLines.length;
   for (let i = 0; i < allLines.length; i++) {
     if (allLines[i].kind !== "sep" && ++contentCount > MAX) { cutIdx = i; break; }
@@ -438,6 +441,15 @@ function renderEntry(entry: TranscriptEntry): void {
         if (overflow > 0) {
           wrap.append(mkEl("div", "entry-tool-more",
             `… (${overflow} more line${overflow === 1 ? "" : "s"})`));
+        }
+      }
+
+      if (entry.patch && DIFF_TOOLS.has(entry.toolName)) {
+        const lastResult = entry.results[entry.results.length - 1];
+        if (lastResult?.ok) {
+          const diffWrap = mkEl("div", "entry-tool-diff");
+          renderDiff(entry.patch, diffWrap, entry.toolName === "write_file" ? WRITE_FILE_PREVIEW_LINES : undefined);
+          if (diffWrap.hasChildNodes()) wrap.append(diffWrap);
         }
       }
 

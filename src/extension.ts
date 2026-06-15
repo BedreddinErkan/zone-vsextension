@@ -502,6 +502,10 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       color: var(--muted);
       font-style: italic;
     }
+    .entry-tool-diff {
+      padding: 4px 0 6px;
+      border-top: 1px solid var(--border);
+    }
 
     /* Error */
     .entry-error { color: #f87171; }
