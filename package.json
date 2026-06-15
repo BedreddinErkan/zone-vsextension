@@ -1,0 +1,36 @@
+{
+  "name": "zone-vscode",
+  "displayName": "Zone",
+  "description": "Minimal Zone VSCode extension shell.",
+  "version": "0.0.1",
+  "publisher": "zone",
+  "engines": {
+    "vscode": "^1.90.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "activationEvents": [
+    "onCommand:zone.openPanel"
+  ],
+  "main": "./out/extension.js",
+  "contributes": {
+    "commands": [
+      {
+        "command": "zone.openPanel",
+        "title": "Zone: Open Panel"
+      }
+    ]
+  },
+  "scripts": {
+    "build": "node esbuild.js",
+    "watch": "node esbuild.js --watch",
+    "vscode:prepublish": "npm run build"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.90.0",
+    "esbuild": "^0.24.2",
+    "typescript": "^5.7.2"
+  }
+}
