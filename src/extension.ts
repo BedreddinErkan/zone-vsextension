@@ -1,11 +1,12 @@
 import * as vscode from 'vscode';
-// @ts-ignore zone's local file dependency does not publish declaration files yet.
-import { runLlmPatchFlow } from 'zone/flow';
-
-type FlowProgressUpdate = string | {
-  stage?: string;
-  [key: string]: unknown;
-};
+import { randomUUID } from "crypto";
+import { runOneShotInner } from "zone/dispatch";
+import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
+import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
+import { reducer, buildInitialState } from "zone/store-core";
+import { resolveCommandApproval } from "zone/approvals";
+import type { StoreState, StoreAction } from "zone/store-core";
+import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/lifecycle";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
@@ -41,7 +42,6 @@ export function activate(context: vscode.ExtensionContext): void {
           return;
         }
 
-        void panel.webview.postMessage({ type: 'appendTranscript', role: 'user', text });
         void runPrompt(panel, text);
       },
       undefined,
@@ -63,32 +63,118 @@ export function activate(context: vscode.ExtensionContext): void {
 async function runPrompt(panel: vscode.WebviewPanel, text: string): Promise<void> {
   const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
   if (!repoPath) {
-    void panel.webview.postMessage({ type: 'narration', text: 'Open a folder in this window first' });
+    void panel.webview.postMessage({ type: "error", text: "Open a folder first" });
     return;
   }
 
-  const config = vscode.workspace.getConfiguration('zone');
-  const apiKey = config.get<string>('openaiApiKey', '');
-  const provider = config.get<string>('provider', 'openai');
-  const controller = new AbortController();
+  const config = loadCliConfig({});
+  await applyDiskKeyFallbacks(config);
+  config.repoPath = repoPath;
+  config.trust = true;
 
+  const settings = vscode.workspace.getConfiguration("zone");
+  const apiKey = settings.get<string>("openaiApiKey", "");
+  if (apiKey) {
+    config.openaiApiKey = apiKey;
+    const prov = settings.get<string>("provider", "");
+    if (prov) config.provider = prov as typeof config.provider;
+    const mdl = settings.get<string>("model", "");
+    if (mdl) config.model = mdl;
+  }
+
+  let state: StoreState = buildInitialState({ model: config.model, capUsd: 100 });
+
+  const apply = (action: StoreAction) => {
+    state = reducer(state, action);
+    void panel.webview.postMessage({ type: "state", state });
+  };
+  const applyAll = (actions: StoreAction[]) => { for (const a of actions) apply(a); };
+
+  // Narration debounce — ported from useAgentEvents.handleTextEvent
+  let localBuffer = "";
+  let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+
+  const flushBuffer = () => {
+    if (debounceTimer !== null) { clearTimeout(debounceTimer); debounceTimer = null; }
+    if (localBuffer) {
+      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: localBuffer });
+      localBuffer = "";
+    }
+  };
+
+  const handleTextEvent = (evt: ZoneStructuredProgressEvent) => {
+    const text = evt.text ?? evt.delta ?? evt.title ?? "";
+    if (!text) return;
+    localBuffer += text;
+    if (debounceTimer !== null) clearTimeout(debounceTimer);
+    debounceTimer = setTimeout(() => {
+      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: localBuffer });
+      localBuffer = "";
+      debounceTimer = null;
+    }, 200);
+  };
+
+  const ctx: EventCtx = { trustedPrefixes: [], mode: "normal" };
+
+  const applyIntents = (intents: ResolverIntent[]) => {
+    for (const intent of intents) {
+      if (intent.kind === "resolveCommand") {
+        resolveCommandApproval({ approvalId: intent.approvalId, runId: intent.runId, approved: intent.approved });
+      }
+      // resolveRevision is Phase 2 — ignore
+    }
+  };
+
+  const route = (evt: ZoneStructuredProgressEvent) => {
+    const t = evt.type;
+    if (t === "narration" || t === "chat_chunk" || t === "chat_response") {
+      handleTextEvent(evt);
+      return;
+    }
+    if (
+      t === "run_failed" || t === "agent_loop_complete" || t === "run_summary" ||
+      t === "tool_call" || t === "phase_changed" ||
+      t === "edit_approval_required" || t === "trust_approval_required"
+    ) {
+      flushBuffer();
+      const { actions, intents } = eventToActions(evt, ctx);
+      applyIntents(intents);
+      applyAll(actions);
+      return;
+    }
+    if (t === "command_approval_required") {
+      const { actions, intents } = eventToActions(evt, ctx);
+      applyIntents(intents);
+      if (actions.length > 0) { flushBuffer(); applyAll(actions); }
+      return;
+    }
+    const { actions, intents } = eventToActions(evt, ctx);
+    applyIntents(intents);
+    applyAll(actions);
+  };
+
+  const onProgress = (update: LlmPatchProgressUpdate) => {
+    if (typeof update === "string") return;
+    const evt = update.progress;
+    if (evt) route(evt);
+  };
+
+  apply({ type: "USER_PROMPT", text });
+
+  const ac = new AbortController();
+  const runId = randomUUID();
   try {
-    await runLlmPatchFlow({
-      task: text,
-      repoPath,
-      provider,
-      userApiKey: apiKey,
-      onProgress: (update: FlowProgressUpdate) => {
-        void panel.webview.postMessage({
-          type: 'narration',
-          text: typeof update === 'string' ? update : (update.stage ?? JSON.stringify(update)),
-        });
-      },
-      abortSignal: controller.signal,
-    });
-  } catch (error) {
-    const message = error instanceof Error ? error.message : String(error);
-    void panel.webview.postMessage({ type: 'narration', text: `Error: ${message}` });
+    await runOneShotInner(text, config, runId, { externalAc: ac, onProgress, mode: "autoAccept" });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    route({ runId, ts: Date.now(), type: "narration", title: "run error",
+            text: `[zone] run error: ${msg}` } as ZoneStructuredProgressEvent);
+  } finally {
+    flushBuffer();
+    if (!ac.signal.aborted) {
+      route({ runId, ts: Date.now(), type: "agent_loop_complete",
+              title: "Run ended" } as ZoneStructuredProgressEvent);
+    }
   }
 }
 
@@ -140,12 +226,6 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     .entry {
       margin: 0 0 10px;
-    }
-
-    .role {
-      opacity: 0.7;
-      text-transform: uppercase;
-      letter-spacing: 0.04em;
     }
 
     #prompt-bar {

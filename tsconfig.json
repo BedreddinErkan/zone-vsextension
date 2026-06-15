@@ -9,6 +9,7 @@
       "ES2022",
       "DOM"
     ],
+    "jsx": "preserve",
     "skipLibCheck": true,
     "noEmit": true
   },
