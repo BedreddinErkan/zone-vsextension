@@ -13,9 +13,9 @@ type VsCodeApi = {
 declare const acquireVsCodeApi: () => VsCodeApi;
 
 const vscode = acquireVsCodeApi();
-const transcriptElement = document.querySelector<HTMLDivElement>('#transcript');
+const transcriptElement = document.querySelector<HTMLDivElement>('#transcript') as HTMLDivElement;
 const form = document.querySelector<HTMLFormElement>('#prompt-bar');
-const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt');
+const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt') as HTMLTextAreaElement;
 
 if (!transcriptElement || !form || !promptInput) {
   throw new Error('Zone webview failed to initialize');
