@@ -8,7 +8,17 @@ type TranscriptEntry =
   | { kind: "user_prompt"; text: string }
   | { kind: "post_execute_diffs"; files: unknown[] };
 
-type StoreState = { transcript: TranscriptEntry[] };
+type StatusBar = {
+  iter: number;
+  costUsd: number;
+  cumulativeTokens: number;
+};
+
+type StoreState = {
+  transcript: TranscriptEntry[];
+  statusBar: StatusBar;
+  spinner: { active: boolean; label: string } | null;
+};
 
 type Controls = {
   model: string;
@@ -48,6 +58,9 @@ const keyDot = document.querySelector<HTMLSpanElement>("#key-dot") as HTMLSpanEl
 const keyLabel = document.querySelector<HTMLSpanElement>("#key-label") as HTMLSpanElement;
 const modelDropdown = document.querySelector<HTMLDivElement>("#model-dropdown") as HTMLDivElement;
 const effortDropdown = document.querySelector<HTMLDivElement>("#effort-dropdown") as HTMLDivElement;
+const spinnerArea  = document.querySelector<HTMLSpanElement>("#spinner-area")  as HTMLSpanElement;
+const spinnerLabel = document.querySelector<HTMLSpanElement>("#spinner-label") as HTMLSpanElement;
+const statusText   = document.querySelector<HTMLSpanElement>("#status-text")   as HTMLSpanElement;
 
 if (!transcriptEl || !promptInput) {
   throw new Error("Zone webview failed to initialize");
@@ -162,12 +175,31 @@ function renderControls(c: Controls): void {
 
 // ── Transcript renderer ───────────────────────────────────────────────────────
 
+function formatStatus(sb: StatusBar): string {
+  const parts: string[] = [];
+  if (sb.iter > 0) parts.push(`iter ${sb.iter}`);
+  if (sb.costUsd > 0) parts.push(`$${sb.costUsd.toFixed(4)}`);
+  if (sb.cumulativeTokens > 0) {
+    parts.push(`${(sb.cumulativeTokens / 1000).toFixed(1)}k tok`);
+  }
+  return parts.join(" · ");
+}
+
 function renderState(state: StoreState): void {
   transcriptEl.textContent = "";
   for (const entry of state.transcript) {
     renderEntry(entry);
   }
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
+
+  if (state.spinner) {
+    spinnerArea.classList.add("active");
+    spinnerLabel.textContent = state.spinner.label;
+  } else {
+    spinnerArea.classList.remove("active");
+  }
+
+  statusText.textContent = formatStatus(state.statusBar);
 }
 
 function appendDiv(text: string): void {

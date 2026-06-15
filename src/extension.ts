@@ -217,6 +217,7 @@ async function runPrompt(
   };
 
   apply({ type: "USER_PROMPT", text });
+  apply({ type: "SPINNER_START", label: "Starting…" });
 
   const ac = new AbortController();
   const runId = randomUUID();
@@ -228,6 +229,7 @@ async function runPrompt(
             text: `[zone] run error: ${msg}` } as ZoneStructuredProgressEvent);
   } finally {
     flushBuffer();
+    apply({ type: "SPINNER_STOP" });
     if (!ac.signal.aborted) {
       route({ runId, ts: Date.now(), type: "agent_loop_complete",
               title: "Run ended" } as ZoneStructuredProgressEvent);
@@ -393,6 +395,42 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     .entry { margin: 0 0 10px; }
 
+    /* ── Status strip ────────────────────────────────── */
+    #status-strip {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      height: 24px;
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    #spinner-area {
+      display: none;
+      align-items: center;
+      gap: 6px;
+    }
+
+    #spinner-area.active { display: flex; }
+
+    #spinner-glyph {
+      width: 8px;
+      height: 8px;
+      border: 1px solid var(--muted);
+      border-top-color: #a855f7;
+      border-radius: 50%;
+      animation: spin 0.7s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin {
+      to { transform: rotate(360deg); }
+    }
+
     /* ── Prompt bar ──────────────────────────────────── */
     #prompt-bar {
       border-top: 1px solid var(--border);
@@ -446,6 +484,13 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       </div>
     </header>
     <div id="transcript" aria-live="polite"></div>
+    <div id="status-strip">
+      <span id="spinner-area">
+        <span id="spinner-glyph"></span>
+        <span id="spinner-label"></span>
+      </span>
+      <span id="status-text"></span>
+    </div>
     <form id="prompt-bar">
       <textarea id="prompt" rows="2" placeholder="Type a prompt, Enter to send, Shift+Enter for newline"></textarea>
     </form>
