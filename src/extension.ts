@@ -12,6 +12,7 @@ import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLe
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentApply: ((action: StoreAction) => void) | null = null;
+let currentState: StoreState | null = null;
 
 type Mode = "default" | "auto" | "plan";
 let currentMode: Mode = "default";
@@ -78,7 +79,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     panel.onDidDispose(
-      () => { currentPanel = undefined; },
+      () => { currentPanel = undefined; currentState = null; },
       undefined,
       context.subscriptions,
     );
@@ -162,14 +163,21 @@ async function runPrompt(
   }
   const { config } = built;
 
-  let state: StoreState = buildInitialState({ model: config.model, capUsd: 100 });
+  if (!currentState) {
+    currentState = buildInitialState({ model: config.model, capUsd: 100 });
+  }
 
   const apply = (action: StoreAction) => {
-    state = reducer(state, action);
-    void panel.webview.postMessage({ type: "state", state });
+    currentState = reducer(currentState!, action);
+    void panel.webview.postMessage({ type: "state", state: currentState });
   };
   currentApply = apply;
   const applyAll = (actions: StoreAction[]) => { for (const a of actions) apply(a); };
+
+  // Clear lingering transients from a prior aborted run (no-ops if run ended cleanly)
+  if (currentState.spinner) apply({ type: "SPINNER_STOP" });
+  if (currentState.pendingApproval) apply({ type: "PENDING_APPROVAL_RESOLVED" });
+  if (currentState.planReadyProposal) apply({ type: "PLAN_READY_RESOLVED" });
 
   // Narration debounce — ported from useAgentEvents.handleTextEvent
   let localBuffer = "";
@@ -247,7 +255,12 @@ async function runPrompt(
   const ac = new AbortController();
   const runId = randomUUID();
   try {
-    await runOneShotInner(text, config, runId, { externalAc: ac, onProgress, mode: currentMode === "plan" ? "plan" : currentMode === "auto" ? "autoAccept" : "normal" });
+    await runOneShotInner(text, config, runId, {
+      externalAc: ac,
+      onProgress,
+      mode: currentMode === "plan" ? "plan" : currentMode === "auto" ? "autoAccept" : "normal",
+      editApprovalMode: currentMode === "default" ? "manual" : "auto",
+    });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     route({ runId, ts: Date.now(), type: "narration", title: "run error",
