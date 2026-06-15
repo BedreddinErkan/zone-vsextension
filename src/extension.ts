@@ -399,7 +399,88 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       line-height: 1.45;
     }
 
-    .entry { margin: 0 0 10px; }
+    .entry { margin: 0 0 6px; }
+
+    /* User prompt */
+    .entry-user {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      margin: 14px 0 8px;
+      padding-left: 10px;
+      border-left: 3px solid #a855f7;
+    }
+    .entry-user-marker { color: #a855f7; flex-shrink: 0; font-size: 11px; }
+    .entry-user-text   { color: #e5e7eb; font-weight: 500; }
+
+    /* Narration */
+    .entry-narration { display: flex; gap: 8px; }
+    .entry-narration-dot { color: var(--muted); font-size: 8px; flex-shrink: 0; padding-top: 4px; }
+
+    /* Thinking */
+    .entry-thinking { color: var(--muted); font-style: italic; }
+
+    /* Assistant final */
+    .entry-assistant-final {
+      padding-top: 8px;
+      margin-top: 2px;
+      border-top: 1px solid var(--border);
+    }
+
+    /* Tool call block */
+    .entry-tool {
+      background: #12121a;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      overflow: hidden;
+      margin-bottom: 8px;
+    }
+    .entry-tool-header {
+      display: flex;
+      align-items: baseline;
+      gap: 6px;
+      padding: 5px 10px;
+      font-size: 12px;
+      border-bottom: 1px solid var(--border);
+      overflow: hidden;
+    }
+    .entry-tool-glyph { color: #a855f7; flex-shrink: 0; }
+    .entry-tool-name  { color: var(--text); flex-shrink: 0; }
+    .entry-tool-args  {
+      color: var(--muted);
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    .entry-tool-result {
+      display: flex;
+      gap: 6px;
+      padding: 3px 10px;
+      font-size: 12px;
+      color: var(--muted);
+      white-space: pre-wrap;
+    }
+    .result-icon { flex-shrink: 0; }
+    .entry-tool-result.ok   .result-icon { color: #22d3ee; }
+    .entry-tool-result.fail .result-icon { color: #f87171; }
+    .entry-tool-more {
+      padding: 2px 10px 5px;
+      font-size: 11px;
+      color: var(--muted);
+      font-style: italic;
+    }
+
+    /* Error */
+    .entry-error { color: #f87171; }
+
+    /* Phase marker */
+    .entry-phase {
+      color: var(--muted);
+      font-size: 11px;
+      letter-spacing: 0.05em;
+      margin: 8px 0 4px;
+      opacity: 0.7;
+    }
 
     /* ── Status strip ────────────────────────────────── */
     #status-strip {

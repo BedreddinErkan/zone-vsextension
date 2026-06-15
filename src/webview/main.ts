@@ -199,6 +199,15 @@ function renderControls(c: Controls): void {
 
 // ── Transcript renderer ───────────────────────────────────────────────────────
 
+function mkEl<K extends keyof HTMLElementTagNameMap>(
+  tag: K, className?: string, text?: string
+): HTMLElementTagNameMap[K] {
+  const e = document.createElement(tag);
+  if (className) e.className = className;
+  if (text !== undefined) e.textContent = text;
+  return e;
+}
+
 function formatStatus(sb: StatusBar): string {
   const parts: string[] = [];
   if (sb.costUsd > 0)
@@ -233,37 +242,73 @@ function renderState(state: StoreState): void {
   }
 }
 
-function appendDiv(text: string): void {
-  const div = document.createElement("div");
-  div.className = "entry";
-  div.textContent = text;
-  transcriptEl.append(div);
-}
-
 function renderEntry(entry: TranscriptEntry): void {
   switch (entry.kind) {
-    case "narration":
+    case "user_prompt": {
+      const wrap = mkEl("div", "entry entry-user");
+      wrap.append(mkEl("span", "entry-user-marker", "›"));
+      wrap.append(mkEl("span", "entry-user-text", entry.text));
+      transcriptEl.append(wrap);
+      break;
+    }
+    case "narration": {
+      const wrap = mkEl("div", "entry entry-narration");
+      wrap.append(mkEl("span", "entry-narration-dot", "◆"));
+      wrap.append(mkEl("span", undefined, entry.text));
+      transcriptEl.append(wrap);
+      break;
+    }
     case "thinking":
+      transcriptEl.append(mkEl("div", "entry entry-thinking", entry.text));
+      break;
     case "assistant_final":
-      appendDiv(entry.text);
+      transcriptEl.append(mkEl("div", "entry entry-assistant-final", entry.text));
       break;
-    case "tool_call":
-      appendDiv(`[tool: ${entry.toolName}] ${entry.args}`);
+    case "tool_call": {
+      const wrap = mkEl("div", "entry entry-tool");
+
+      const header = mkEl("div", "entry-tool-header");
+      header.append(mkEl("span", "entry-tool-glyph", "▸"));
+      header.append(mkEl("span", "entry-tool-name", entry.toolName));
+      if (entry.args) header.append(mkEl("span", "entry-tool-args", entry.args));
+      wrap.append(header);
+
       for (const result of entry.results) {
-        appendDiv(result.detail);
+        const row = mkEl("div", `entry-tool-result ${result.ok ? "ok" : "fail"}`);
+        row.append(mkEl("span", "result-icon", result.ok ? "✓" : "✗"));
+
+        // Strip leading boilerplate line [exit_code=…]
+        let detail = result.detail;
+        const firstNl = detail.indexOf("\n");
+        const firstLine = firstNl >= 0 ? detail.slice(0, firstNl) : detail;
+        if (firstLine.startsWith("[exit_code=")) {
+          detail = (firstNl >= 0 ? detail.slice(firstNl + 1) : "").trimStart();
+        }
+
+        // Truncate to 10 lines
+        const lines = detail.split("\n");
+        const MAX_LINES = 10;
+        const shown = lines.slice(0, MAX_LINES).join("\n");
+        const overflow = lines.length - MAX_LINES;
+
+        row.append(mkEl("span", undefined, shown));
+        wrap.append(row);
+        if (overflow > 0) {
+          wrap.append(mkEl("div", "entry-tool-more",
+            `… (${overflow} more line${overflow === 1 ? "" : "s"})`));
+        }
       }
+
+      transcriptEl.append(wrap);
       break;
+    }
     case "error":
-      appendDiv(`[error] ${entry.text}`);
+      transcriptEl.append(mkEl("div", "entry entry-error", `✗ ${entry.text}`));
       break;
     case "phase_marker":
-      appendDiv(`[phase] ${entry.phase}`);
-      break;
-    case "user_prompt":
-      appendDiv(`> ${entry.text}`);
+      transcriptEl.append(mkEl("div", "entry entry-phase", `── ${entry.phase} ──`));
       break;
     case "post_execute_diffs":
-      // Phase 1b
       break;
   }
 }
