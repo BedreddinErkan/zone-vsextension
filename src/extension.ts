@@ -405,7 +405,7 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       flex-shrink: 0;
       border-top: 1px solid var(--border);
       background: var(--bg);
-      font-size: 11px;
+      font-size: 12px;
       color: var(--muted);
     }
 
@@ -417,12 +417,15 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     #spinner-area.active { display: flex; }
 
+    #spinner-label { color: #e5e7eb; }
+
     #spinner-glyph {
-      width: 8px;
-      height: 8px;
-      border: 1px solid var(--muted);
-      border-top-color: #a855f7;
+      width: 10px;
+      height: 10px;
       border-radius: 50%;
+      background: conic-gradient(from 0deg, #ec4899, #a855f7, #6366f1, #22d3ee, #ec4899);
+      -webkit-mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0);
+      mask: radial-gradient(farthest-side, transparent calc(100% - 2px), #000 0);
       animation: spin 0.7s linear infinite;
       flex-shrink: 0;
     }

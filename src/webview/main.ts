@@ -9,7 +9,6 @@ type TranscriptEntry =
   | { kind: "post_execute_diffs"; files: unknown[] };
 
 type StatusBar = {
-  iter: number;
   costUsd: number;
   cumulativeTokens: number;
 };
@@ -177,11 +176,10 @@ function renderControls(c: Controls): void {
 
 function formatStatus(sb: StatusBar): string {
   const parts: string[] = [];
-  if (sb.iter > 0) parts.push(`iter ${sb.iter}`);
-  if (sb.costUsd > 0) parts.push(`$${sb.costUsd.toFixed(4)}`);
-  if (sb.cumulativeTokens > 0) {
-    parts.push(`${(sb.cumulativeTokens / 1000).toFixed(1)}k tok`);
-  }
+  if (sb.costUsd > 0)
+    parts.push(`<span style="color:#22d3ee">$${sb.costUsd.toFixed(4)}</span>`);
+  if (sb.cumulativeTokens > 0)
+    parts.push(`<span style="color:#a855f7">${(sb.cumulativeTokens / 1000).toFixed(1)}k</span> tok`);
   return parts.join(" · ");
 }
 
@@ -199,7 +197,7 @@ function renderState(state: StoreState): void {
     spinnerArea.classList.remove("active");
   }
 
-  statusText.textContent = formatStatus(state.statusBar);
+  statusText.innerHTML = formatStatus(state.statusBar);
 }
 
 function appendDiv(text: string): void {
