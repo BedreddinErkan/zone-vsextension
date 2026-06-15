@@ -9,10 +9,16 @@ import { resolveCommandApproval, resolveEditApproval, resolvePlanApproval, type 
 import type { StoreState, StoreAction } from "zone/store-core";
 import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/lifecycle";
 import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLevel } from "zone/model-registry";
+import {
+  buildSessionWindow, truncateSessionTurn, truncateForContinuation,
+  USER_PROMPT_MAX_BYTES, MAX_CHANGED_FILES,
+} from "zone/session-window";
+import { readFsConversationEvents, appendFsConversationEvent } from "zone/conversation-store";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentApply: ((action: StoreAction) => void) | null = null;
 let currentState: StoreState | null = null;
+let currentSessionId: string | null = null;
 
 type Mode = "default" | "auto" | "plan";
 let currentMode: Mode = "default";
@@ -79,7 +85,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     panel.onDidDispose(
-      () => { currentPanel = undefined; currentState = null; },
+      () => { currentPanel = undefined; currentState = null; currentSessionId = null; },
       undefined,
       context.subscriptions,
     );
@@ -100,6 +106,7 @@ async function buildRunConfig(
   await applyDiskKeyFallbacks(config);
   config.repoPath = repoPath;
   config.trust = true;
+  config.memoryEnabled = true;
 
   const model = context.workspaceState.get<string>("zone.model", "gpt-5.5");
   config.model = model;
@@ -179,6 +186,12 @@ async function runPrompt(
   if (currentState.pendingApproval) apply({ type: "PENDING_APPROVAL_RESOLVED" });
   if (currentState.planReadyProposal) apply({ type: "PLAN_READY_RESOLVED" });
 
+  // Cross-turn memory — sessionId is per-panel, survives across prompts, reset on dispose
+  if (!currentSessionId) currentSessionId = randomUUID();
+  const priorSessionSummary = buildSessionWindow(
+    readFsConversationEvents({ repoPath: config.repoPath, threadId: currentSessionId })
+  ) || undefined;
+
   // Narration debounce — ported from useAgentEvents.handleTextEvent
   let localBuffer = "";
   let debounceTimer: ReturnType<typeof setTimeout> | null = null;
@@ -254,12 +267,14 @@ async function runPrompt(
 
   const ac = new AbortController();
   const runId = randomUUID();
+  let runResult: Awaited<ReturnType<typeof runOneShotInner>> | undefined;
   try {
-    await runOneShotInner(text, config, runId, {
+    runResult = await runOneShotInner(text, config, runId, {
       externalAc: ac,
       onProgress,
       mode: currentMode === "plan" ? "plan" : currentMode === "auto" ? "autoAccept" : "normal",
       editApprovalMode: currentMode === "default" ? "manual" : "auto",
+      priorSessionSummary,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -273,6 +288,47 @@ async function runPrompt(
       route({ runId, ts: Date.now(), type: "agent_loop_complete",
               title: "Run ended" } as ZoneStructuredProgressEvent);
     }
+  }
+
+  // Persist turn record for cross-turn memory; capture sessionId locally to guard
+  // against a panel dispose that races the async write.
+  const sessionId = currentSessionId;
+  if (sessionId) {
+    const isAborted = ac.signal.aborted;
+    const rawPreview = runResult?.ok ? runResult.patchPreview : undefined;
+    const fd = runResult?.ok ? (runResult.fileDiffs ?? []) : [];
+    const changedFiles = fd.map((d: { filePath: string }) => d.filePath).slice(0, MAX_CHANGED_FILES);
+    // Inline stripBanner — matches tui/index.tsx:62
+    const stripped = rawPreview !== undefined ? rawPreview.replace(/^=== [A-Z ]+===\n/, "") : undefined;
+    const summary = isAborted
+      ? (changedFiles.length > 0
+          ? `interrupted; ${changedFiles.length} file${changedFiles.length === 1 ? "" : "s"} partially modified`
+          : "interrupted before any changes")
+      : (stripped !== undefined ? truncateSessionTurn(stripped) : "");
+    const fullAnswer = !isAborted && stripped !== undefined && stripped.length > 0
+      ? truncateForContinuation(stripped)
+      : undefined;
+    // Inline deriveNeutralOutcome — matches tui/index.tsx:113-119
+    const outcome = isAborted ? "interrupted"
+      : !runResult ? "no_change"
+      : !runResult.ok ? "reverted"
+      : changedFiles.length > 0 ? "applied"
+      : rawPreview ? "answered"
+      : "no_change";
+    await appendFsConversationEvent({
+      repoPath: config.repoPath,
+      threadId: sessionId,
+      event: {
+        type: "turn",
+        ts: Date.now(),
+        runId,
+        userPrompt: text.slice(0, USER_PROMPT_MAX_BYTES),
+        summary,
+        ...(fullAnswer !== undefined ? { fullAnswer } : {}),
+        changedFiles,
+        outcome,
+      },
+    });
   }
 }
 
