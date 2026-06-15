@@ -17,6 +17,7 @@ type StoreState = {
   transcript: TranscriptEntry[];
   statusBar: StatusBar;
   spinner: { active: boolean; label: string } | null;
+  pendingApproval: { approvalId: string; runId: string; command: string; kind?: string } | null;
 };
 
 type Controls = {
@@ -37,6 +38,7 @@ type VsCodeApi = {
     | { type: "setKey"; provider: string }
     | { type: "setModel"; model: string }
     | { type: "setEffort"; effort: string }
+    | { type: "approveCommand"; approvalId: string; runId: string; approved: boolean }
   ): void;
 };
 
@@ -60,6 +62,10 @@ const effortDropdown = document.querySelector<HTMLDivElement>("#effort-dropdown"
 const spinnerArea  = document.querySelector<HTMLSpanElement>("#spinner-area")  as HTMLSpanElement;
 const spinnerLabel = document.querySelector<HTMLSpanElement>("#spinner-label") as HTMLSpanElement;
 const statusText   = document.querySelector<HTMLSpanElement>("#status-text")   as HTMLSpanElement;
+const approvalPrompt     = document.querySelector<HTMLDivElement>("#approval-prompt")      as HTMLDivElement;
+const approvalCommandEl  = document.querySelector<HTMLElement>("#approval-command")        as HTMLElement;
+const approvalApproveBtn = document.querySelector<HTMLButtonElement>("#approval-approve") as HTMLButtonElement;
+const approvalDenyBtn    = document.querySelector<HTMLButtonElement>("#approval-deny")    as HTMLButtonElement;
 
 if (!transcriptEl || !promptInput) {
   throw new Error("Zone webview failed to initialize");
@@ -69,6 +75,7 @@ if (!transcriptEl || !promptInput) {
 
 let activeDropdown: HTMLDivElement | null = null;
 let currentControls: Controls | null = null;
+let currentPending: { approvalId: string; runId: string; command: string } | null = null;
 
 function toggleDropdown(dd: HTMLDivElement): void {
   if (activeDropdown && activeDropdown !== dd) activeDropdown.classList.remove("open");
@@ -91,6 +98,24 @@ effortBtn.addEventListener("click", () => toggleDropdown(effortDropdown));
 keyBtn.addEventListener("click", () => {
   if (activeDropdown) { activeDropdown.classList.remove("open"); activeDropdown = null; }
   vscode.postMessage({ type: "setKey", provider: currentControls?.provider ?? "openai" });
+});
+
+approvalApproveBtn.addEventListener("click", () => {
+  if (!currentPending) return;
+  vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true });
+});
+approvalDenyBtn.addEventListener("click", () => {
+  if (!currentPending) return;
+  vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
+});
+document.addEventListener("keydown", (e) => {
+  if (!currentPending) return;
+  if (e.key === "Escape") {
+    vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
+  } else if (e.key === "Enter" && !e.shiftKey && document.activeElement !== promptInput) {
+    e.preventDefault();
+    vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true });
+  }
 });
 
 promptInput.addEventListener("keydown", (event) => {
@@ -198,6 +223,14 @@ function renderState(state: StoreState): void {
   }
 
   statusText.innerHTML = formatStatus(state.statusBar);
+
+  currentPending = state.pendingApproval ?? null;
+  if (state.pendingApproval) {
+    approvalCommandEl.textContent = state.pendingApproval.command;
+    approvalPrompt.style.display = "block";
+  } else {
+    approvalPrompt.style.display = "none";
+  }
 }
 
 function appendDiv(text: string): void {

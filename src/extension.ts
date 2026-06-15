@@ -11,6 +11,7 @@ import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/l
 import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLevel } from "zone/model-registry";
 
 let currentPanel: vscode.WebviewPanel | undefined;
+let currentApply: ((action: StoreAction) => void) | null = null;
 
 export function activate(context: vscode.ExtensionContext): void {
   const disposable = vscode.commands.registerCommand('zone.openPanel', () => {
@@ -30,7 +31,7 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
 
     panel.webview.onDidReceiveMessage(
-      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string }) => {
+      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean }) => {
         if (message.type === "prompt" && typeof message.text === "string") {
           const text = message.text.trim();
           if (text) void runPrompt(panel, text, context);
@@ -49,6 +50,9 @@ export function activate(context: vscode.ExtensionContext): void {
         } else if (message.type === "setEffort" && message.effort) {
           await context.workspaceState.update("zone.effort", message.effort);
           void postControls(panel, context);
+        } else if (message.type === "approveCommand" && message.approvalId && message.runId) {
+          resolveCommandApproval({ approvalId: message.approvalId, runId: message.runId, approved: !!message.approved });
+          currentApply?.({ type: "PENDING_APPROVAL_RESOLVED" });
         }
       },
       undefined,
@@ -145,6 +149,7 @@ async function runPrompt(
     state = reducer(state, action);
     void panel.webview.postMessage({ type: "state", state });
   };
+  currentApply = apply;
   const applyAll = (actions: StoreAction[]) => { for (const a of actions) apply(a); };
 
   // Narration debounce — ported from useAgentEvents.handleTextEvent
@@ -229,6 +234,7 @@ async function runPrompt(
             text: `[zone] run error: ${msg}` } as ZoneStructuredProgressEvent);
   } finally {
     flushBuffer();
+    currentApply = null;
     apply({ type: "SPINNER_STOP" });
     if (!ac.signal.aborted) {
       route({ runId, ts: Date.now(), type: "agent_loop_complete",
@@ -458,6 +464,62 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     #prompt::placeholder { color: var(--muted); }
 
     #prompt:focus { border-color: var(--muted); }
+
+    /* ── Approval prompt ─────────────────────────────────── */
+    #approval-prompt {
+      flex-shrink: 0;
+      border-top: 1px solid var(--border);
+      background: #12121a;
+      padding: 10px 12px;
+      display: none;
+    }
+
+    #approval-label {
+      font-size: 11px;
+      color: #f59e0b;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      margin-bottom: 6px;
+      display: block;
+    }
+
+    #approval-command {
+      display: block;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      padding: 8px 10px;
+      font: 12px/1.4 var(--font);
+      color: var(--text);
+      border-radius: 3px;
+      white-space: pre-wrap;
+      word-break: break-all;
+      margin-bottom: 8px;
+    }
+
+    #approval-actions { display: flex; gap: 8px; }
+
+    #approval-approve {
+      background: linear-gradient(90deg,#6366f1,#a855f7);
+      border: none;
+      color: #fff;
+      font: 11px/1 var(--font);
+      font-weight: 600;
+      padding: 5px 14px;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    #approval-approve:hover { filter: brightness(1.15); }
+
+    #approval-deny {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font: 11px/1 var(--font);
+      padding: 5px 14px;
+      border-radius: 3px;
+      cursor: pointer;
+    }
+    #approval-deny:hover { border-color: var(--muted); color: var(--text); }
   </style>
 </head>
 <body>
@@ -493,6 +555,14 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
         <span id="spinner-label"></span>
       </span>
       <span id="status-text"></span>
+    </div>
+    <div id="approval-prompt">
+      <span id="approval-label">⚠ Approve command?</span>
+      <code id="approval-command"></code>
+      <div id="approval-actions">
+        <button type="button" id="approval-approve">Approve  [Enter]</button>
+        <button type="button" id="approval-deny">Deny  [Esc]</button>
+      </div>
     </div>
     <form id="prompt-bar">
       <textarea id="prompt" rows="2" placeholder="Type a prompt, Enter to send, Shift+Enter for newline"></textarea>
