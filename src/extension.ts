@@ -1,4 +1,11 @@
 import * as vscode from 'vscode';
+// @ts-ignore zone's local file dependency does not publish declaration files yet.
+import { runLlmPatchFlow } from 'zone/flow';
+
+type FlowProgressUpdate = string | {
+  stage?: string;
+  [key: string]: unknown;
+};
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
@@ -35,7 +42,7 @@ export function activate(context: vscode.ExtensionContext): void {
         }
 
         void panel.webview.postMessage({ type: 'appendTranscript', role: 'user', text });
-        void panel.webview.postMessage({ type: 'appendTranscript', role: 'system', text: `(echo) ${text}` });
+        void runPrompt(panel, text);
       },
       undefined,
       context.subscriptions,
@@ -51,6 +58,38 @@ export function activate(context: vscode.ExtensionContext): void {
   });
 
   context.subscriptions.push(disposable);
+}
+
+async function runPrompt(panel: vscode.WebviewPanel, text: string): Promise<void> {
+  const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!repoPath) {
+    void panel.webview.postMessage({ type: 'narration', text: 'Open a folder in this window first' });
+    return;
+  }
+
+  const config = vscode.workspace.getConfiguration('zone');
+  const apiKey = config.get<string>('openaiApiKey', '');
+  const provider = config.get<string>('provider', 'openai');
+  const controller = new AbortController();
+
+  try {
+    await runLlmPatchFlow({
+      task: text,
+      repoPath,
+      provider,
+      userApiKey: apiKey,
+      onProgress: (update: FlowProgressUpdate) => {
+        void panel.webview.postMessage({
+          type: 'narration',
+          text: typeof update === 'string' ? update : (update.stage ?? JSON.stringify(update)),
+        });
+      },
+      abortSignal: controller.signal,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    void panel.webview.postMessage({ type: 'narration', text: `Error: ${message}` });
+  }
 }
 
 export function deactivate(): void {

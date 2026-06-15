@@ -20,7 +20,24 @@
         "command": "zone.openPanel",
         "title": "Zone: Open Panel"
       }
-    ]
+    ],
+    "configuration": {
+      "title": "Zone",
+      "properties": {
+        "zone.openaiApiKey": {
+          "type": "string",
+          "default": ""
+        },
+        "zone.provider": {
+          "type": "string",
+          "default": "openai"
+        },
+        "zone.model": {
+          "type": "string",
+          "default": "gpt-5.5"
+        }
+      }
+    }
   },
   "scripts": {
     "build": "node esbuild.js",
@@ -32,5 +49,8 @@
     "@types/vscode": "^1.90.0",
     "esbuild": "^0.24.2",
     "typescript": "^5.7.2"
+  },
+  "dependencies": {
+    "zone": "file:../zone"
   }
 }

@@ -6,6 +6,11 @@ type AppendTranscriptMessage = {
   text: string;
 };
 
+type NarrationMessage = {
+  type: 'narration';
+  text: string;
+};
+
 type VsCodeApi = {
   postMessage(message: { type: 'prompt'; text: string }): void;
 };
@@ -13,9 +18,9 @@ type VsCodeApi = {
 declare const acquireVsCodeApi: () => VsCodeApi;
 
 const vscode = acquireVsCodeApi();
-const transcriptElement = document.querySelector<HTMLDivElement>('#transcript');
+const transcriptElement = document.querySelector<HTMLDivElement>('#transcript') as HTMLDivElement;
 const form = document.querySelector<HTMLFormElement>('#prompt-bar');
-const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt');
+const promptInput = document.querySelector<HTMLTextAreaElement>('#prompt') as HTMLTextAreaElement;
 
 if (!transcriptElement || !form || !promptInput) {
   throw new Error('Zone webview failed to initialize');
@@ -33,16 +38,19 @@ promptInput.addEventListener('keydown', (event) => {
   }
 });
 
-window.addEventListener('message', (event: MessageEvent<AppendTranscriptMessage>) => {
+window.addEventListener('message', (event: MessageEvent<AppendTranscriptMessage | NarrationMessage>) => {
   const message = event.data;
-  if (message.type !== 'appendTranscript') {
+  if (message.type === 'appendTranscript') {
+    appendTranscript(message.role, message.text);
     return;
   }
 
-  appendTranscript(message.role, message.text);
+  if (message.type === 'narration') {
+    appendTranscript('system', message.text);
+  }
 });
 
-appendTranscript('system', 'Zone shell ready. Messages echo through the extension host.');
+appendTranscript('system', 'Zone shell ready.');
 
 function sendPrompt(): void {
   const text = promptInput.value.trim();
