@@ -5,7 +5,7 @@ import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
 import type { CliConfig } from "zone/config";
 import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
 import { reducer, buildInitialState } from "zone/store-core";
-import { resolveCommandApproval, resolvePlanApproval, type PlanDecision } from "zone/approvals";
+import { resolveCommandApproval, resolveEditApproval, resolvePlanApproval, type PlanDecision } from "zone/approvals";
 import type { StoreState, StoreAction } from "zone/store-core";
 import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/lifecycle";
 import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLevel } from "zone/model-registry";
@@ -13,8 +13,8 @@ import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLe
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentApply: ((action: StoreAction) => void) | null = null;
 
-type Mode = "auto" | "plan";
-let currentMode: Mode = "auto";
+type Mode = "default" | "auto" | "plan";
+let currentMode: Mode = "default";
 
 export function activate(context: vscode.ExtensionContext): void {
   const disposable = vscode.commands.registerCommand('zone.openPanel', () => {
@@ -34,7 +34,7 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
 
     panel.webview.onDidReceiveMessage(
-      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; mode?: string; planId?: string; decision?: string; feedback?: string }) => {
+      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; kind?: string; mode?: string; planId?: string; decision?: string; feedback?: string }) => {
         if (message.type === "prompt" && typeof message.text === "string") {
           const text = message.text.trim();
           if (text) void runPrompt(panel, text, context);
@@ -54,7 +54,11 @@ export function activate(context: vscode.ExtensionContext): void {
           await context.workspaceState.update("zone.effort", message.effort);
           void postControls(panel, context);
         } else if (message.type === "approveCommand" && message.approvalId && message.runId) {
-          resolveCommandApproval({ approvalId: message.approvalId, runId: message.runId, approved: !!message.approved });
+          if (message.kind === "edit") {
+            resolveEditApproval({ approvalId: message.approvalId, runId: message.runId, approved: !!message.approved });
+          } else {
+            resolveCommandApproval({ approvalId: message.approvalId, runId: message.runId, approved: !!message.approved });
+          }
           currentApply?.({ type: "PENDING_APPROVAL_RESOLVED" });
         } else if (message.type === "setMode" && message.mode) {
           currentMode = message.mode as Mode;
@@ -243,7 +247,7 @@ async function runPrompt(
   const ac = new AbortController();
   const runId = randomUUID();
   try {
-    await runOneShotInner(text, config, runId, { externalAc: ac, onProgress, mode: currentMode === "plan" ? "plan" : "autoAccept" });
+    await runOneShotInner(text, config, runId, { externalAc: ac, onProgress, mode: currentMode === "plan" ? "plan" : currentMode === "auto" ? "autoAccept" : "normal" });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     route({ runId, ts: Date.now(), type: "narration", title: "run error",
@@ -503,6 +507,32 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       border-color: #6366f1;
       color: #818cf8;
     }
+
+    #mode-btn[data-mode="auto"] {
+      border-color: #22d3ee;
+      color: #22d3ee;
+    }
+
+    /* ── Diff view (edit approval) ───────────────────── */
+    #approval-diff {
+      display: none;
+      background: var(--bg);
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 4px 0;
+      margin-bottom: 8px;
+      max-height: 180px;
+      overflow-y: auto;
+    }
+    .diff-line {
+      font: 11px/1.5 var(--font);
+      padding: 0 10px;
+      white-space: pre;
+    }
+    .diff-removed { color: #f87171; }
+    .diff-added   { color: #4ade80; }
+    .diff-sep     { font: 11px/1.5 var(--font); padding: 0 10px; color: var(--muted); }
+    .diff-overflow { font: 11px/1.4 var(--font); padding: 0 10px; color: var(--muted); font-style: italic; }
 
     /* ── Plan-ready panel ────────────────────────────── */
     #plan-ready {
@@ -777,13 +807,14 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     <div id="approval-prompt">
       <span id="approval-label">⚠ Approve command?</span>
       <code id="approval-command"></code>
+      <div id="approval-diff"></div>
       <div id="approval-actions">
         <button type="button" id="approval-approve">Approve  [Enter]</button>
         <button type="button" id="approval-deny">Deny  [Esc]</button>
       </div>
     </div>
     <form id="prompt-bar">
-      <textarea id="prompt" rows="2" placeholder="Type a prompt · Enter to send · Shift+Enter newline · Shift+Tab: mode"></textarea>
+      <textarea id="prompt" rows="2" placeholder="Type a prompt · Enter to send · Shift+Enter newline"></textarea>
     </form>
   </main>
   <script nonce="${nonce}" src="${scriptUri}"></script>

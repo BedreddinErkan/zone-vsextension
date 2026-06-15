@@ -25,10 +25,11 @@ type StoreState = {
     steps: Array<{ title: string; description: string; filesLikely: string[]; subagentEligible?: boolean }>;
     scopeNotes?: string;
   } | null;
+  liveTail?: { currentToolCall?: { patch?: string } | null } | null;
 };
 
 type Controls = {
-  mode: "auto" | "plan";
+  mode: "default" | "auto" | "plan";
   model: string;
   effort: string | null;
   provider: "openai" | "anthropic";
@@ -46,8 +47,8 @@ type VsCodeApi = {
     | { type: "setKey"; provider: string }
     | { type: "setModel"; model: string }
     | { type: "setEffort"; effort: string }
-    | { type: "approveCommand"; approvalId: string; runId: string; approved: boolean }
-    | { type: "setMode"; mode: "auto" | "plan" }
+    | { type: "approveCommand"; approvalId: string; runId: string; approved: boolean; kind?: string }
+    | { type: "setMode"; mode: "default" | "auto" | "plan" }
     | { type: "planDecision"; planId: string; runId: string; decision: string; feedback?: string }
   ): void;
 };
@@ -76,6 +77,8 @@ const approvalPrompt     = document.querySelector<HTMLDivElement>("#approval-pro
 const approvalCommandEl  = document.querySelector<HTMLElement>("#approval-command")        as HTMLElement;
 const approvalApproveBtn = document.querySelector<HTMLButtonElement>("#approval-approve") as HTMLButtonElement;
 const approvalDenyBtn    = document.querySelector<HTMLButtonElement>("#approval-deny")    as HTMLButtonElement;
+const approvalLabel      = document.querySelector<HTMLSpanElement>("#approval-label")     as HTMLSpanElement;
+const approvalDiffEl     = document.querySelector<HTMLDivElement>("#approval-diff")       as HTMLDivElement;
 const modeBtn        = document.querySelector<HTMLButtonElement>("#mode-btn")          as HTMLButtonElement;
 const modeLabel      = document.querySelector<HTMLSpanElement>("#mode-label")          as HTMLSpanElement;
 const planReadyEl    = document.querySelector<HTMLDivElement>("#plan-ready")           as HTMLDivElement;
@@ -97,8 +100,8 @@ if (!transcriptEl || !promptInput) {
 
 let activeDropdown: HTMLDivElement | null = null;
 let currentControls: Controls | null = null;
-let currentPending: { approvalId: string; runId: string; command: string } | null = null;
-let currentMode: "auto" | "plan" = "auto";
+let currentPending: { approvalId: string; runId: string; command: string; kind?: string } | null = null;
+let currentMode: "default" | "auto" | "plan" = "default";
 let currentPlanReady: { planId: string; runId: string } | null = null;
 
 function toggleDropdown(dd: HTMLDivElement): void {
@@ -126,23 +129,23 @@ keyBtn.addEventListener("click", () => {
 
 approvalApproveBtn.addEventListener("click", () => {
   if (!currentPending) return;
-  vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true });
+  vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true, kind: currentPending.kind });
 });
 approvalDenyBtn.addEventListener("click", () => {
   if (!currentPending) return;
-  vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
+  vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false, kind: currentPending.kind });
 });
 document.addEventListener("keydown", (e) => {
   if (e.key === "Escape") {
     if (currentPending) {
-      vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false });
+      vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: false, kind: currentPending.kind });
     } else if (currentPlanReady) {
       sendPlanDecision("reject");
     }
   } else if (e.key === "Enter" && !e.shiftKey && document.activeElement !== promptInput) {
     if (currentPending) {
       e.preventDefault();
-      vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true });
+      vscode.postMessage({ type: "approveCommand", approvalId: currentPending.approvalId, runId: currentPending.runId, approved: true, kind: currentPending.kind });
     }
   }
 });
@@ -164,16 +167,16 @@ planBtnFeedback.addEventListener("click", () => sendPlanDecision("feedback"));
 planBtnFbRun.addEventListener("click", () => sendPlanDecision("approve_with_feedback"));
 planBtnReject.addEventListener("click", () => sendPlanDecision("reject"));
 
+modeBtn.addEventListener("click", () => {
+  const next: "default" | "auto" | "plan" =
+    currentMode === "default" ? "auto" : currentMode === "auto" ? "plan" : "default";
+  currentMode = next;
+  modeLabel.textContent = next;
+  modeBtn.dataset["mode"] = next;
+  vscode.postMessage({ type: "setMode", mode: next });
+});
+
 promptInput.addEventListener("keydown", (event) => {
-  if (event.key === "Tab" && event.shiftKey) {
-    event.preventDefault();
-    const next: "auto" | "plan" = currentMode === "auto" ? "plan" : "auto";
-    currentMode = next;
-    modeLabel.textContent = next;
-    modeBtn.dataset["mode"] = next;
-    vscode.postMessage({ type: "setMode", mode: next });
-    return;
-  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     const text = promptInput.value.trim();
@@ -294,9 +297,21 @@ function renderState(state: StoreState): void {
 
   currentPending = state.pendingApproval ?? null;
   if (state.pendingApproval) {
+    const isEdit = state.pendingApproval.kind === "edit";
+    approvalLabel.textContent = isEdit ? "⚠ Approve edit?" : "⚠ Approve command?";
     approvalCommandEl.textContent = state.pendingApproval.command;
+    const patch = isEdit ? state.liveTail?.currentToolCall?.patch : undefined;
+    if (patch) {
+      renderDiff(patch, approvalDiffEl);
+      approvalDiffEl.style.display = "block";
+    } else {
+      approvalDiffEl.innerHTML = "";
+      approvalDiffEl.style.display = "none";
+    }
     approvalPrompt.style.display = "block";
   } else {
+    approvalDiffEl.innerHTML = "";
+    approvalDiffEl.style.display = "none";
     approvalPrompt.style.display = "none";
   }
 
@@ -326,6 +341,47 @@ function renderState(state: StoreState): void {
   } else {
     planReadyEl.style.display = "none";
   }
+}
+
+function renderDiff(patch: string, container: HTMLElement): void {
+  container.innerHTML = "";
+  const FIND_M = "--- FIND ---";
+  const REPL_M = "--- REPLACE ---";
+  type DL = { kind: "remove" | "add"; text: string } | { kind: "sep" };
+  const allLines: DL[] = [];
+  let first = true;
+  patch.split(FIND_M).slice(1).forEach((part) => {
+    const ri = part.indexOf(REPL_M);
+    if (ri === -1) return;
+    const trim = (s: string) => s.replace(/^\r?\n/, "").replace(/\r?\n$/, "");
+    const findTrimmed = trim(part.slice(0, ri));
+    const replTrimmed = trim(part.slice(ri + REPL_M.length));
+    const findLines = findTrimmed ? findTrimmed.split("\n") : [];
+    const replLines = replTrimmed ? replTrimmed.split("\n") : [];
+    if (!first) allLines.push({ kind: "sep" });
+    first = false;
+    findLines.forEach((l) => allLines.push({ kind: "remove", text: l }));
+    replLines.forEach((l) => allLines.push({ kind: "add", text: l }));
+  });
+  if (allLines.length === 0) return;
+  const MAX = 20;
+  let contentCount = 0, cutIdx = allLines.length;
+  for (let i = 0; i < allLines.length; i++) {
+    if (allLines[i].kind !== "sep" && ++contentCount > MAX) { cutIdx = i; break; }
+  }
+  const shown = allLines.slice(0, cutIdx);
+  const remaining = allLines.slice(cutIdx).filter((l) => l.kind !== "sep").length;
+  for (const l of shown) {
+    if (l.kind === "sep") {
+      container.append(mkEl("div", "diff-sep", "···"));
+    } else {
+      const el = mkEl("div", `diff-line ${l.kind === "remove" ? "diff-removed" : "diff-added"}`);
+      el.textContent = `${l.kind === "remove" ? "−" : "+"} ${l.text}`;
+      container.append(el);
+    }
+  }
+  if (remaining > 0)
+    container.append(mkEl("div", "diff-overflow", `… +${remaining} more line${remaining === 1 ? "" : "s"}`));
 }
 
 function renderEntry(entry: TranscriptEntry): void {
