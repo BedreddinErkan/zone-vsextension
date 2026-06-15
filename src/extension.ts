@@ -2,11 +2,13 @@ import * as vscode from 'vscode';
 import { randomUUID } from "crypto";
 import { runOneShotInner } from "zone/dispatch";
 import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
+import type { CliConfig } from "zone/config";
 import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
 import { reducer, buildInitialState } from "zone/store-core";
 import { resolveCommandApproval } from "zone/approvals";
 import type { StoreState, StoreAction } from "zone/store-core";
 import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/lifecycle";
+import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLevel } from "zone/model-registry";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 
@@ -21,66 +23,121 @@ export function activate(context: vscode.ExtensionContext): void {
       'zonePanel',
       'Zone',
       vscode.ViewColumn.One,
-      {
-        enableScripts: true,
-        retainContextWhenHidden: true,
-      },
+      { enableScripts: true, retainContextWhenHidden: true },
     );
 
     currentPanel = panel;
-    const nonce = getNonce();
-    panel.webview.html = getHtml(panel.webview, context.extensionUri, nonce);
+    panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
 
     panel.webview.onDidReceiveMessage(
-      (message: { type?: string; text?: string }) => {
-        if (message.type !== 'prompt' || typeof message.text !== 'string') {
-          return;
+      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string }) => {
+        if (message.type === "prompt" && typeof message.text === "string") {
+          const text = message.text.trim();
+          if (text) void runPrompt(panel, text, context);
+        } else if (message.type === "setKey" && message.provider) {
+          const provName = message.provider === "openai" ? "OpenAI" : "Anthropic";
+          const v = await vscode.window.showInputBox({
+            password: true,
+            ignoreFocusOut: true,
+            prompt: `Enter ${provName} API key`,
+          });
+          if (v) await context.secrets.store(`zone.key.${message.provider}`, v);
+          void postControls(panel, context);
+        } else if (message.type === "setModel" && message.model) {
+          await context.workspaceState.update("zone.model", message.model);
+          void postControls(panel, context);
+        } else if (message.type === "setEffort" && message.effort) {
+          await context.workspaceState.update("zone.effort", message.effort);
+          void postControls(panel, context);
         }
-
-        const text = message.text.trim();
-        if (!text) {
-          return;
-        }
-
-        void runPrompt(panel, text);
       },
       undefined,
       context.subscriptions,
     );
 
     panel.onDidDispose(
-      () => {
-        currentPanel = undefined;
-      },
+      () => { currentPanel = undefined; },
       undefined,
       context.subscriptions,
     );
+
+    void postControls(panel, context);
   });
 
   context.subscriptions.push(disposable);
 }
 
-async function runPrompt(panel: vscode.WebviewPanel, text: string): Promise<void> {
+async function buildRunConfig(
+  context: vscode.ExtensionContext,
+): Promise<{ config: CliConfig; repoPath: string } | null> {
   const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  if (!repoPath) {
-    void panel.webview.postMessage({ type: "error", text: "Open a folder first" });
-    return;
-  }
+  if (!repoPath) return null;
 
   const config = loadCliConfig({});
   await applyDiskKeyFallbacks(config);
   config.repoPath = repoPath;
   config.trust = true;
 
-  const settings = vscode.workspace.getConfiguration("zone");
-  const apiKey = settings.get<string>("openaiApiKey", "");
-  if (apiKey) {
-    config.openaiApiKey = apiKey;
-    const prov = settings.get<string>("provider", "");
-    if (prov) config.provider = prov as typeof config.provider;
-    const mdl = settings.get<string>("model", "");
-    if (mdl) config.model = mdl;
+  const model = context.workspaceState.get<string>("zone.model", "gpt-5.5");
+  config.model = model;
+  config.provider = getProviderForModel(model) as typeof config.provider;
+
+  const effort = context.workspaceState.get<EffortLevel>("zone.effort");
+  if (effort) config.effort = effort;
+
+  if (config.provider === "openai") {
+    const secret = await context.secrets.get("zone.key.openai");
+    const fallback = vscode.workspace.getConfiguration("zone").get<string>("openaiApiKey", "");
+    if (secret || fallback) config.openaiApiKey = secret || fallback;
+  } else {
+    const secret = await context.secrets.get("zone.key.anthropic");
+    if (secret) config.anthropicApiKey = secret;
   }
+
+  return { config, repoPath };
+}
+
+async function postControls(
+  panel: vscode.WebviewPanel,
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const model = context.workspaceState.get<string>("zone.model", "gpt-5.5");
+  const effort = context.workspaceState.get<string>("zone.effort") ?? null;
+  const provider = getProviderForModel(model);
+  const efforts = effortLevelsFor(model);
+
+  let keySet = false;
+  if (provider === "openai") {
+    const secret = await context.secrets.get("zone.key.openai");
+    keySet = !!(secret) || !!(vscode.workspace.getConfiguration("zone").get<string>("openaiApiKey", ""));
+  } else {
+    keySet = !!(await context.secrets.get("zone.key.anthropic"));
+  }
+
+  void panel.webview.postMessage({
+    type: "controls",
+    controls: {
+      model,
+      effort,
+      provider,
+      keySet,
+      models: USER_FACING_MODELS.map((m) => ({ id: m.id, displayName: m.displayName, provider: m.provider })),
+      efforts,
+    },
+  });
+}
+
+async function runPrompt(
+  panel: vscode.WebviewPanel,
+  text: string,
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const built = await buildRunConfig(context);
+  if (!built) {
+    void panel.webview.postMessage({ type: "error", text: "Open a folder first" });
+    return;
+  }
+  const { config } = built;
 
   let state: StoreState = buildInitialState({ model: config.model, capUsd: 100 });
 
@@ -193,17 +250,24 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
   <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline' ${webview.cspSource}; script-src 'nonce-${nonce}';">
   <title>Zone</title>
   <style>
-    * {
-      box-sizing: border-box;
+    :root {
+      --bg: #0c0c10;
+      --text: #e5e7eb;
+      --muted: #6b7280;
+      --border: #1e1e28;
+      --font: ui-monospace, "SF Mono", Menlo, monospace;
     }
+
+    * { box-sizing: border-box; }
 
     body {
       margin: 0;
       height: 100vh;
       overflow: hidden;
-      background: var(--vscode-editor-background);
-      color: var(--vscode-editor-foreground);
-      font-family: var(--vscode-font-family);
+      background: var(--bg);
+      color: var(--text);
+      font-family: var(--font);
+      font-size: 13px;
     }
 
     #app {
@@ -213,25 +277,127 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       min-height: 0;
     }
 
+    /* ── Control bar ─────────────────────────────────── */
+    #control-bar {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0 12px;
+      height: 40px;
+      flex-shrink: 0;
+      border-bottom: 1px solid var(--border);
+    }
+
+    #wordmark {
+      background: linear-gradient(90deg,#ec4899,#a855f7,#6366f1,#22d3ee);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      background-clip: text;
+      font-size: 13px;
+      font-weight: 700;
+      letter-spacing: 0.12em;
+      user-select: none;
+    }
+
+    #controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+    }
+
+    .ctrl { position: relative; }
+
+    .ctrl-btn {
+      background: none;
+      border: 1px solid var(--border);
+      color: var(--text);
+      font: 11px/1 var(--font);
+      padding: 4px 8px;
+      cursor: pointer;
+      border-radius: 3px;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      white-space: nowrap;
+    }
+
+    .ctrl-btn:hover { border-color: var(--muted); }
+
+    .ctrl-sub {
+      color: var(--muted);
+      font-size: 9px;
+    }
+
+    /* gradient border on key control when key not set */
+    #key-ctrl[data-unset] .ctrl-btn {
+      border-color: transparent;
+      background:
+        linear-gradient(#0c0c10, #0c0c10) padding-box,
+        linear-gradient(90deg,#ec4899,#a855f7,#6366f1,#22d3ee) border-box;
+    }
+
+    .key-dot {
+      width: 6px;
+      height: 6px;
+      border-radius: 50%;
+      border: 1px solid var(--muted);
+      flex-shrink: 0;
+    }
+
+    .key-dot.is-set {
+      background: #a855f7;
+      border-color: transparent;
+    }
+
+    /* ── Dropdowns ───────────────────────────────────── */
+    .dropdown {
+      position: absolute;
+      top: calc(100% + 4px);
+      right: 0;
+      background: #12121a;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      min-width: 160px;
+      z-index: 100;
+      display: none;
+    }
+
+    .dropdown.open { display: block; }
+
+    .dropdown-item {
+      padding: 6px 10px;
+      font: 11px/1.4 var(--font);
+      color: var(--text);
+      cursor: pointer;
+    }
+
+    .dropdown-item:hover { background: #1e1e28; }
+
+    .dropdown-item.active { color: #a855f7; }
+
+    .dropdown-sep {
+      height: 1px;
+      background: var(--border);
+      margin: 4px 0;
+    }
+
+    /* ── Transcript ──────────────────────────────────── */
     #transcript {
       flex: 1;
       min-height: 0;
       overflow-y: auto;
       padding: 16px;
       white-space: pre-wrap;
-      font-family: var(--vscode-font-family);
-      font-size: 13px;
       line-height: 1.45;
     }
 
-    .entry {
-      margin: 0 0 10px;
-    }
+    .entry { margin: 0 0 10px; }
 
+    /* ── Prompt bar ──────────────────────────────────── */
     #prompt-bar {
-      border-top: 1px solid color-mix(in srgb, var(--vscode-editor-foreground) 18%, transparent);
+      border-top: 1px solid var(--border);
       padding: 10px;
-      background: var(--vscode-editor-background);
+      background: var(--bg);
     }
 
     #prompt {
@@ -240,21 +406,45 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       min-height: 44px;
       max-height: 160px;
       resize: vertical;
-      border: 1px solid color-mix(in srgb, var(--vscode-editor-foreground) 24%, transparent);
+      border: 1px solid var(--border);
       outline: none;
       padding: 10px;
-      background: var(--vscode-input-background);
-      color: var(--vscode-input-foreground);
-      font: 13px/1.4 var(--vscode-font-family);
+      background: #12121a;
+      color: var(--text);
+      font: 13px/1.4 var(--font);
     }
 
-    #prompt:focus {
-      border-color: var(--vscode-focusBorder);
-    }
+    #prompt::placeholder { color: var(--muted); }
+
+    #prompt:focus { border-color: var(--muted); }
   </style>
 </head>
 <body>
   <main id="app">
+    <header id="control-bar">
+      <span id="wordmark">zone</span>
+      <div id="controls">
+        <div class="ctrl" id="model-ctrl">
+          <button class="ctrl-btn" id="model-btn" type="button">
+            <span id="model-label">…</span>
+            <span class="ctrl-sub" id="provider-label"></span>
+          </button>
+          <div class="dropdown" id="model-dropdown"></div>
+        </div>
+        <div class="ctrl" id="effort-ctrl" hidden>
+          <button class="ctrl-btn" id="effort-btn" type="button">
+            <span id="effort-label">effort</span>
+          </button>
+          <div class="dropdown" id="effort-dropdown"></div>
+        </div>
+        <div class="ctrl" id="key-ctrl" data-unset="">
+          <button class="ctrl-btn" id="key-btn" type="button">
+            <span class="key-dot" id="key-dot"></span>
+            <span id="key-label">set key</span>
+          </button>
+        </div>
+      </div>
+    </header>
     <div id="transcript" aria-live="polite"></div>
     <form id="prompt-bar">
       <textarea id="prompt" rows="2" placeholder="Type a prompt, Enter to send, Shift+Enter for newline"></textarea>
@@ -268,10 +458,8 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 function getNonce(): string {
   const possible = 'ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789';
   let text = '';
-
   for (let i = 0; i < 32; i += 1) {
     text += possible.charAt(Math.floor(Math.random() * possible.length));
   }
-
   return text;
 }
