@@ -30,6 +30,7 @@ type StoreState = {
 
 type Controls = {
   mode: "default" | "auto" | "plan";
+  webSearchEnabled: boolean;
   model: string;
   effort: string | null;
   provider: "openai" | "anthropic";
@@ -49,6 +50,7 @@ type VsCodeApi = {
     | { type: "setEffort"; effort: string }
     | { type: "approveCommand"; approvalId: string; runId: string; approved: boolean; kind?: string }
     | { type: "setMode"; mode: "default" | "auto" | "plan" }
+    | { type: "toggleWebSearch" }
     | { type: "planDecision"; planId: string; runId: string; decision: string; feedback?: string }
     | { type: "abort" }
   ): void;
@@ -90,6 +92,8 @@ const approvalLabel      = document.querySelector<HTMLSpanElement>("#approval-la
 const approvalDiffEl     = document.querySelector<HTMLDivElement>("#approval-diff")       as HTMLDivElement;
 const modeBtn        = document.querySelector<HTMLButtonElement>("#mode-btn")          as HTMLButtonElement;
 const modeLabel      = document.querySelector<HTMLSpanElement>("#mode-label")          as HTMLSpanElement;
+const websearchBtn   = document.querySelector<HTMLButtonElement>("#websearch-btn")     as HTMLButtonElement;
+const websearchLabel = document.querySelector<HTMLSpanElement>("#websearch-label")     as HTMLSpanElement;
 const planReadyEl    = document.querySelector<HTMLDivElement>("#plan-ready")           as HTMLDivElement;
 const planObjEl      = document.querySelector<HTMLDivElement>("#plan-ready-objective") as HTMLDivElement;
 const planStepsEl    = document.querySelector<HTMLOListElement>("#plan-ready-steps")   as HTMLOListElement;
@@ -280,6 +284,10 @@ modeBtn.addEventListener("click", () => {
   vscode.postMessage({ type: "setMode", mode: next });
 });
 
+websearchBtn.addEventListener("click", () => {
+  vscode.postMessage({ type: "toggleWebSearch" });
+});
+
 promptInput.addEventListener("keydown", (event) => {
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
@@ -316,6 +324,9 @@ function renderControls(c: Controls): void {
   currentMode = c.mode;
   modeLabel.textContent = c.mode;
   modeBtn.dataset["mode"] = c.mode;
+
+  websearchLabel.textContent = c.webSearchEnabled ? "web: on" : "web: off";
+  websearchBtn.dataset["enabled"] = String(c.webSearchEnabled);
 
   modelLabel.textContent = c.model;
   providerLabel.textContent = c.provider;

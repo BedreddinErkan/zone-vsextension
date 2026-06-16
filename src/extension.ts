@@ -73,6 +73,10 @@ export function activate(context: vscode.ExtensionContext): void {
         } else if (message.type === "setMode" && message.mode) {
           currentMode = message.mode as Mode;
           void postControls(panel, context);
+        } else if (message.type === "toggleWebSearch") {
+          const cur = context.workspaceState.get<boolean>("zone.webSearchEnabled", true);
+          await context.workspaceState.update("zone.webSearchEnabled", !cur);
+          void postControls(panel, context);
         } else if (message.type === "planDecision" && message.planId && message.runId && message.decision) {
           resolvePlanApproval({
             planId: message.planId,
@@ -120,6 +124,8 @@ async function buildRunConfig(
   const effort = context.workspaceState.get<EffortLevel>("zone.effort");
   if (effort) config.effort = effort;
 
+  config.webSearchEnabled = context.workspaceState.get<boolean>("zone.webSearchEnabled", true);
+
   if (config.provider === "openai") {
     const secret = await context.secrets.get("zone.key.openai");
     const fallback = vscode.workspace.getConfiguration("zone").get<string>("openaiApiKey", "");
@@ -138,6 +144,7 @@ async function postControls(
 ): Promise<void> {
   const model = context.workspaceState.get<string>("zone.model", "gpt-5.5");
   const effort = context.workspaceState.get<string>("zone.effort") ?? null;
+  const webSearchEnabled = context.workspaceState.get<boolean>("zone.webSearchEnabled", true);
   const provider = getProviderForModel(model);
   const efforts = effortLevelsFor(model);
 
@@ -153,6 +160,7 @@ async function postControls(
     type: "controls",
     controls: {
       mode: currentMode,
+      webSearchEnabled,
       model,
       effort,
       provider,
@@ -623,6 +631,15 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       color: #22d3ee;
     }
 
+    /* ── Web search chip ─────────────────────────────── */
+    #websearch-btn[data-enabled="true"] {
+      border-color: #22d3ee;
+      color: #22d3ee;
+    }
+    #websearch-btn[data-enabled="false"] {
+      color: var(--muted);
+    }
+
     /* ── Diff view (edit approval) ───────────────────── */
     #approval-diff {
       display: none;
@@ -942,6 +959,11 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
         <div class="ctrl" id="mode-ctrl">
           <button class="ctrl-btn" id="mode-btn" type="button" data-mode="auto">
             <span id="mode-label">auto</span>
+          </button>
+        </div>
+        <div class="ctrl" id="websearch-ctrl">
+          <button class="ctrl-btn" id="websearch-btn" type="button" data-enabled="true">
+            <span id="websearch-label">web: on</span>
           </button>
         </div>
         <div class="ctrl" id="effort-ctrl" hidden>
