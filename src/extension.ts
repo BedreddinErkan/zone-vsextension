@@ -239,9 +239,28 @@ async function runPrompt(
       handleTextEvent(evt);
       return;
     }
+    if (t === "tool_call") {
+      flushBuffer();
+      const { actions, intents } = eventToActions(evt, ctx);
+      applyIntents(intents);
+      applyAll(actions);
+      // Live spinner: reflect the running tool. Phase labels (verification/
+      // compaction/scope-audit) own their own SPINNER_UPDATE — not touched here.
+      if (evt.toolName) apply({ type: "SPINNER_UPDATE", label: `Running ${evt.toolName}…` });
+      return;
+    }
+    if (t === "tool_result") {
+      const { actions, intents } = eventToActions(evt, ctx);
+      applyIntents(intents);
+      applyAll(actions);
+      // Tool finished → back to the generating label. Driven off tool_result
+      // (not a blanket text handler) so phase labels stay intact.
+      apply({ type: "SPINNER_UPDATE", label: "Thinking…" });
+      return;
+    }
     if (
       t === "run_failed" || t === "agent_loop_complete" || t === "run_summary" ||
-      t === "tool_call" || t === "phase_changed" ||
+      t === "phase_changed" ||
       t === "edit_approval_required" || t === "trust_approval_required" ||
       t === "plan_ready_for_approval"
     ) {
@@ -274,7 +293,7 @@ async function runPrompt(
     currentApply = null;
     return;
   }
-  apply({ type: "SPINNER_START", label: "Starting…" });
+  apply({ type: "SPINNER_START", label: "Thinking…" });
 
   const ac = new AbortController();
   currentAc = ac;
