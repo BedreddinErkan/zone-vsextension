@@ -4,4 +4,7 @@ tsconfig.json
 .gitignore
 .vscode/**
 node_modules/**
-*.map
+.zone/**
+.claude/**
+package-lock.json
+**/*.map

@@ -1,14 +1,29 @@
 {
   "name": "zone-vscode",
   "displayName": "Zone",
-  "description": "Minimal Zone VSCode extension shell.",
+  "description": "AI coding agent for VS Code — BYOK, atomic file edits with /undo, daily cost cap",
   "version": "0.0.1",
-  "publisher": "zone",
+  "publisher": "zonecli",
+  "license": "AGPL-3.0-or-later",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/BedreddinErkan/zone-vsextension"
+  },
   "engines": {
     "vscode": "^1.90.0"
   },
   "categories": [
+    "AI",
+    "Programming Languages",
     "Other"
+  ],
+  "keywords": [
+    "ai",
+    "agent",
+    "coding",
+    "llm",
+    "openai",
+    "anthropic"
   ],
   "activationEvents": [
     "onCommand:zone.openPanel"
@@ -42,15 +57,16 @@
   "scripts": {
     "build": "node esbuild.js",
     "watch": "node esbuild.js --watch",
+    "package": "npx @vscode/vsce package",
     "vscode:prepublish": "npm run build"
   },
+  "dependencies": {},
   "devDependencies": {
     "@types/node": "^22.10.2",
     "@types/vscode": "^1.90.0",
+    "@vscode/vsce": "^3.0.0",
     "esbuild": "^0.24.2",
-    "typescript": "^5.7.2"
-  },
-  "dependencies": {
+    "typescript": "^5.7.2",
     "zone": "file:../zone"
   }
 }
