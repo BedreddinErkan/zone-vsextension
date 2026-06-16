@@ -19,6 +19,7 @@ let currentPanel: vscode.WebviewPanel | undefined;
 let currentApply: ((action: StoreAction) => void) | null = null;
 let currentState: StoreState | null = null;
 let currentSessionId: string | null = null;
+let currentAc: AbortController | null = null;
 
 type Mode = "default" | "auto" | "plan";
 let currentMode: Mode = "default";
@@ -78,6 +79,8 @@ export function activate(context: vscode.ExtensionContext): void {
             ...(message.feedback ? { feedback: message.feedback } : {}),
           });
           currentApply?.({ type: "PLAN_READY_RESOLVED" });
+        } else if (message.type === "abort") {
+          currentAc?.abort();
         }
       },
       undefined,
@@ -85,7 +88,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     panel.onDidDispose(
-      () => { currentPanel = undefined; currentState = null; currentSessionId = null; },
+      () => { currentPanel = undefined; currentState = null; currentSessionId = null; currentAc = null; },
       undefined,
       context.subscriptions,
     );
@@ -266,6 +269,7 @@ async function runPrompt(
   apply({ type: "SPINNER_START", label: "Starting…" });
 
   const ac = new AbortController();
+  currentAc = ac;
   const runId = randomUUID();
   let runResult: Awaited<ReturnType<typeof runOneShotInner>> | undefined;
   try {
@@ -288,6 +292,7 @@ async function runPrompt(
       route({ runId, ts: Date.now(), type: "agent_loop_complete",
               title: "Run ended" } as ZoneStructuredProgressEvent);
     }
+    currentAc = null;
   }
 
   // Persist turn record for cross-turn memory; capture sessionId locally to guard
@@ -727,6 +732,18 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     #spinner-label { color: #e5e7eb; }
 
+    #stop-btn {
+      background: none;
+      border: 1px solid #ef4444;
+      border-radius: 3px;
+      color: #ef4444;
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1;
+      padding: 1px 5px;
+    }
+    #stop-btn:hover { background: rgba(239,68,68,.15); }
+
     #spinner-glyph {
       width: 10px;
       height: 10px;
@@ -860,6 +877,7 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       <span id="spinner-area">
         <span id="spinner-glyph"></span>
         <span id="spinner-label"></span>
+        <button type="button" id="stop-btn" hidden>stop</button>
       </span>
       <span id="status-text"></span>
     </div>

@@ -50,6 +50,7 @@ type VsCodeApi = {
     | { type: "approveCommand"; approvalId: string; runId: string; approved: boolean; kind?: string }
     | { type: "setMode"; mode: "default" | "auto" | "plan" }
     | { type: "planDecision"; planId: string; runId: string; decision: string; feedback?: string }
+    | { type: "abort" }
   ): void;
 };
 
@@ -75,6 +76,7 @@ const modelDropdown = document.querySelector<HTMLDivElement>("#model-dropdown") 
 const effortDropdown = document.querySelector<HTMLDivElement>("#effort-dropdown") as HTMLDivElement;
 const spinnerArea  = document.querySelector<HTMLSpanElement>("#spinner-area")  as HTMLSpanElement;
 const spinnerLabel = document.querySelector<HTMLSpanElement>("#spinner-label") as HTMLSpanElement;
+const stopBtn      = document.querySelector<HTMLButtonElement>("#stop-btn")    as HTMLButtonElement;
 const statusText   = document.querySelector<HTMLSpanElement>("#status-text")   as HTMLSpanElement;
 const approvalPrompt     = document.querySelector<HTMLDivElement>("#approval-prompt")      as HTMLDivElement;
 const approvalCommandEl  = document.querySelector<HTMLElement>("#approval-command")        as HTMLElement;
@@ -98,6 +100,10 @@ const planBtnReject    = document.querySelector<HTMLButtonElement>("#plan-btn-re
 if (!transcriptEl || !promptInput) {
   throw new Error("Zone webview failed to initialize");
 }
+
+stopBtn.addEventListener("click", () => {
+  vscode.postMessage({ type: "abort" });
+});
 
 // ── Dropdown state ────────────────────────────────────────────────────────────
 
@@ -184,6 +190,7 @@ promptInput.addEventListener("keydown", (event) => {
     event.preventDefault();
     const text = promptInput.value.trim();
     if (!text) return;
+    if (spinnerArea.classList.contains("active")) return;
     vscode.postMessage({ type: "prompt", text });
     promptInput.value = "";
   }
@@ -292,8 +299,10 @@ function renderState(state: StoreState): void {
   if (state.spinner) {
     spinnerArea.classList.add("active");
     spinnerLabel.textContent = state.spinner.label;
+    stopBtn.hidden = false;
   } else {
     spinnerArea.classList.remove("active");
+    stopBtn.hidden = true;
   }
 
   statusText.innerHTML = formatStatus(state.statusBar);
