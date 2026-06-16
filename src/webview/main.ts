@@ -67,6 +67,7 @@ const WRITE_FILE_PREVIEW_LINES = 7;
 const SLASH_COMMANDS: Record<string, string> = {
   memory: "Show .zone/memory.md",
   init: "Scaffold .zone/memory.md by analyzing the repo",
+  feedback: "Send a bug report / feedback to the maintainer",
 };
 
 const vscode = acquireVsCodeApi();

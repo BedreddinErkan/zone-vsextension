@@ -21,6 +21,7 @@ let currentApply: ((action: StoreAction) => void) | null = null;
 let currentState: StoreState | null = null;
 let currentSessionId: string | null = null;
 let currentAc: AbortController | null = null;
+let currentRunId: string | null = null;   // last run's id (snapshot key) — for /feedback, /undo
 
 type Mode = "default" | "auto" | "plan";
 let currentMode: Mode = "default";
@@ -100,7 +101,7 @@ export function activate(context: vscode.ExtensionContext): void {
     );
 
     panel.onDidDispose(
-      () => { currentPanel = undefined; currentState = null; currentSessionId = null; currentAc = null; },
+      () => { currentPanel = undefined; currentState = null; currentSessionId = null; currentAc = null; currentRunId = null; },
       undefined,
       context.subscriptions,
     );
@@ -312,6 +313,7 @@ async function runPrompt(
   const ac = new AbortController();
   currentAc = ac;
   const runId = randomUUID();
+  currentRunId = runId;   // snapshot key; kept after the run for /feedback + /undo
   let runResult: Awaited<ReturnType<typeof runOneShotInner>> | undefined;
   try {
     runResult = await runOneShotInner(text, config, runId, {
@@ -386,6 +388,7 @@ type SlashHandler = (ctx: SlashCtx) => void | Promise<void>;
 const SLASH_HANDLERS: Record<string, SlashHandler> = {
   memory: handleMemoryCommand,
   init: handleInitCommand,
+  feedback: handleFeedbackCommand,
 };
 
 async function handleMemoryCommand(_ctx: SlashCtx): Promise<void> {
@@ -456,6 +459,28 @@ async function handleInitCommand(ctx: SlashCtx): Promise<void> {
     currentAc = null;
     for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
   }
+}
+
+async function handleFeedbackCommand(ctx: SlashCtx): Promise<void> {
+  const version = (ctx.context.extension.packageJSON as { version?: string }).version ?? "unknown";
+  const model = ctx.context.workspaceState.get<string>("zone.model", "gpt-5.5");
+  const body =
+    "Describe the issue:\n\n\n" +
+    "---\n" +
+    "Diagnostics:\n" +
+    `- Extension: zone-vscode ${version}\n` +
+    `- Model: ${model}\n` +
+    `- Last run: ${currentRunId ?? "none"}\n` +
+    `- Platform: ${process.platform}\n`;
+  const subject = "Zone feedback";
+  const cappedBody = body.length > 1800 ? body.slice(0, 1800) + "…" : body;   // mailto length guard (mirrors TUI)
+  const mailtoUrl =
+    "mailto:feedback@zonecli.dev" +
+    "?subject=" + encodeURIComponent(subject) +
+    "&body=" + encodeURIComponent(cappedBody);
+  void vscode.env.openExternal(vscode.Uri.parse(mailtoUrl));   // opens default mail client
+  void vscode.env.clipboard.writeText(body);                   // fallback: full body on clipboard
+  void vscode.window.showInformationMessage("Feedback draft opened (copied to clipboard).");
 }
 
 export function deactivate(): void {
