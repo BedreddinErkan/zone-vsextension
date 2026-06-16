@@ -507,14 +507,18 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     /* User prompt */
     .entry-user {
       display: flex;
-      align-items: baseline;
+      align-items: flex-start;
       gap: 8px;
       margin: 14px 0 8px;
       padding-left: 10px;
       border-left: 3px solid #a855f7;
     }
     .entry-user-marker { color: #a855f7; flex-shrink: 0; font-size: 11px; }
+    .entry-user-body   { display: flex; flex-direction: column; gap: 4px; flex: 1; }
     .entry-user-text   { color: #e5e7eb; font-weight: 500; }
+    .entry-user-thumbs { display: flex; flex-wrap: wrap; gap: 4px; }
+    .entry-user-thumb  { width: 48px; height: 48px; object-fit: cover; border-radius: 3px; border: 1px solid var(--border); cursor: default; }
+    .entry-user-thumb-more { font-size: 11px; color: var(--muted); align-self: center; }
 
     /* Narration */
     .entry-narration { display: flex; gap: 8px; }

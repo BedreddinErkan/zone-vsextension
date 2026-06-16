@@ -140,14 +140,14 @@ function renderChips(): void {
   });
 }
 
-function addImage(base64: string, mediaType: string, label: string): void {
+function addImage(base64: string, mediaType: string, label: string, thumb: string): void {
   if (!ALLOWED_MEDIA_TYPES.includes(mediaType)) { showAttachError("Unsupported image type"); return; }
   if (stagedImages.length >= 4) { showAttachError("Too many images (max 4)"); return; }
   const byteLen = Math.ceil(base64.length * 3 / 4);
   if (byteLen > 5 * 1024 * 1024) { showAttachError("Image exceeds 5 MB limit"); return; }
   const totalBytes = stagedImages.reduce((sum, img) => sum + Math.ceil(img.base64.length * 3 / 4), 0);
   if (totalBytes + byteLen > 16 * 1024 * 1024) { showAttachError("Total images exceed 16 MB limit"); return; }
-  stagedImages.push({ mediaType, base64, label });
+  stagedImages.push({ mediaType, base64, label, thumb });
   renderChips();
 }
 
@@ -158,7 +158,21 @@ function readFileAsImage(file: File, label: string): void {
     const commaIdx = dataUrl.indexOf(",");
     const base64 = dataUrl.slice(commaIdx + 1);
     const mediaType = dataUrl.slice(5, commaIdx).split(";")[0];
-    addImage(base64, mediaType, label);
+    const img = new Image();
+    img.onload = () => {
+      const MAX = 128;
+      const scale = Math.min(1, MAX / Math.max(img.naturalWidth || 1, img.naturalHeight || 1));
+      const canvas = document.createElement("canvas");
+      canvas.width = Math.round((img.naturalWidth || 1) * scale);
+      canvas.height = Math.round((img.naturalHeight || 1) * scale);
+      canvas.getContext("2d")!.drawImage(img, 0, 0, canvas.width, canvas.height);
+      addImage(base64, mediaType, label, canvas.toDataURL("image/jpeg", 0.7));
+    };
+    img.onerror = () => {
+      // Canvas decode failed — fall back to the full data URL as the thumbnail
+      addImage(base64, mediaType, label, dataUrl);
+    };
+    img.src = dataUrl;
   });
   reader.readAsDataURL(file);
 }
@@ -186,7 +200,9 @@ promptInput.addEventListener("paste", (e) => {
 // ── Dropdown state ────────────────────────────────────────────────────────────
 
 let activeDropdown: HTMLDivElement | null = null;
-let stagedImages: { mediaType: string; base64: string; label: string }[] = [];
+let stagedImages: { mediaType: string; base64: string; label: string; thumb: string }[] = [];
+let lastTranscriptLen = 0;
+const thumbnailsByTranscriptIdx = new Map<number, string[]>();
 let currentControls: Controls | null = null;
 let currentPending: { approvalId: string; runId: string; command: string; kind?: string } | null = null;
 let currentMode: "default" | "auto" | "plan" = "default";
@@ -273,6 +289,9 @@ promptInput.addEventListener("keydown", (event) => {
     const images = stagedImages.length > 0
       ? stagedImages.map(({ mediaType, base64 }) => ({ mediaType, base64 }))
       : undefined;
+    if (stagedImages.length > 0) {
+      thumbnailsByTranscriptIdx.set(lastTranscriptLen, stagedImages.map(img => img.thumb));
+    }
     vscode.postMessage({ type: "prompt", text, ...(images ? { images } : {}) });
     promptInput.value = "";
     stagedImages = [];
@@ -375,9 +394,8 @@ function formatStatus(sb: StatusBar): string {
 
 function renderState(state: StoreState): void {
   transcriptEl.textContent = "";
-  for (const entry of state.transcript) {
-    renderEntry(entry);
-  }
+  state.transcript.forEach((entry, i) => renderEntry(entry, i));
+  lastTranscriptLen = state.transcript.length;
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
   if (state.spinner) {
@@ -482,12 +500,28 @@ function renderDiff(patch: string, container: HTMLElement, maxLines = 20): void 
     container.append(mkEl("div", "diff-overflow", `… +${remaining} more line${remaining === 1 ? "" : "s"}`));
 }
 
-function renderEntry(entry: TranscriptEntry): void {
+function renderEntry(entry: TranscriptEntry, idx = -1): void {
   switch (entry.kind) {
     case "user_prompt": {
       const wrap = mkEl("div", "entry entry-user");
       wrap.append(mkEl("span", "entry-user-marker", "›"));
-      wrap.append(mkEl("span", "entry-user-text", entry.text));
+      const body = mkEl("div", "entry-user-body");
+      body.append(mkEl("span", "entry-user-text", entry.text));
+      const thumbs = thumbnailsByTranscriptIdx.get(idx) ?? [];
+      if (thumbs.length > 0) {
+        const row = mkEl("div", "entry-user-thumbs");
+        thumbs.slice(0, 4).forEach(src => {
+          const el = document.createElement("img");
+          el.src = src;
+          el.className = "entry-user-thumb";
+          row.append(el);
+        });
+        if (thumbs.length > 4) {
+          row.append(mkEl("span", "entry-user-thumb-more", `+${thumbs.length - 4} more`));
+        }
+        body.append(row);
+      }
+      wrap.append(body);
       transcriptEl.append(wrap);
       break;
     }
