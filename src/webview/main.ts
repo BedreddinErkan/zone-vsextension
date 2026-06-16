@@ -68,6 +68,7 @@ const SLASH_COMMANDS: Record<string, string> = {
   memory: "Show .zone/memory.md",
   init: "Scaffold .zone/memory.md by analyzing the repo",
   feedback: "Send a bug report / feedback to the maintainer",
+  undo: "Undo the last run (restore files to pre-run state)",
 };
 
 const vscode = acquireVsCodeApi();

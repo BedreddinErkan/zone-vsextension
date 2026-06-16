@@ -2,6 +2,7 @@ import * as vscode from 'vscode';
 import { randomUUID } from "crypto";
 import { runOneShotInner } from "zone/dispatch";
 import { runInitFlow } from "zone/init";
+import { restoreSnapshot, listSnapshots, getDriftedPaths } from "zone/snapshots";
 import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
 import type { CliConfig } from "zone/config";
 import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
@@ -389,6 +390,7 @@ const SLASH_HANDLERS: Record<string, SlashHandler> = {
   memory: handleMemoryCommand,
   init: handleInitCommand,
   feedback: handleFeedbackCommand,
+  undo: handleUndoCommand,
 };
 
 async function handleMemoryCommand(_ctx: SlashCtx): Promise<void> {
@@ -481,6 +483,41 @@ async function handleFeedbackCommand(ctx: SlashCtx): Promise<void> {
   void vscode.env.openExternal(vscode.Uri.parse(mailtoUrl));   // opens default mail client
   void vscode.env.clipboard.writeText(body);                   // fallback: full body on clipboard
   void vscode.window.showInformationMessage("Feedback draft opened (copied to clipboard).");
+}
+
+async function handleUndoCommand(_ctx: SlashCtx): Promise<void> {
+  // Run-active guard — restoring mid-run corrupts the run (same rationale as /init).
+  if (currentAc) { void vscode.window.showInformationMessage("Can't undo while a run is in progress."); return; }
+  if (!currentRunId) { void vscode.window.showInformationMessage("Nothing to undo yet."); return; }
+  const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  if (!repoPath) { void vscode.window.showInformationMessage("Open a folder first."); return; }
+
+  // Undoability — the LAST run must have a non-undone snapshot (read-only runs leave none).
+  const snapshots = await listSnapshots(repoPath);
+  const manifest = snapshots.find((s) => s.runId === currentRunId && !s.undone);
+  if (!manifest) { void vscode.window.showInformationMessage("Nothing to undo."); return; }
+
+  const drifted = await getDriftedPaths(manifest, repoPath);
+  const fileCount = manifest.files.length;
+  const driftedCount = drifted.length;
+
+  // Destructive → modal confirmation that surfaces the effect + any drift.
+  const pick = await vscode.window.showWarningMessage(
+    `Undo the last run? Restores ${fileCount} file${fileCount === 1 ? "" : "s"} to ` +
+      `${fileCount === 1 ? "its" : "their"} pre-run state` +
+      (driftedCount ? `, overwriting ${driftedCount} changed since the run` : "") + ".",
+    { modal: true },
+    "Undo",
+  );
+  if (pick !== "Undo") return;   // cancelled
+
+  try {
+    const result = await restoreSnapshot(currentRunId, repoPath);
+    if (result.alreadyUndone) { void vscode.window.showInformationMessage("Already undone."); return; }
+    void vscode.window.showInformationMessage(`✓ Undid last run — restored ${result.reverted} file${result.reverted === 1 ? "" : "s"}.`);
+  } catch (err) {
+    void vscode.window.showErrorMessage(`Undo failed: ${err instanceof Error ? err.message : String(err)}`);
+  }
 }
 
 export function deactivate(): void {
