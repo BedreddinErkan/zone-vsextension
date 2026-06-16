@@ -44,7 +44,7 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
 
     panel.webview.onDidReceiveMessage(
-      async (message: { type?: string; text?: string; images?: { mediaType: string; base64: string }[]; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; kind?: string; mode?: string; planId?: string; decision?: string; feedback?: string }) => {
+      async (message: { type?: string; text?: string; images?: { mediaType: string; base64: string }[]; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; kind?: string; mode?: string; planId?: string; decision?: string; feedback?: string; command?: string; args?: string }) => {
         if (message.type === "prompt" && typeof message.text === "string") {
           const text = message.text.trim();
           if (text) void runPrompt(panel, text, context, message.images as ImageAttachment[] | undefined);
@@ -87,6 +87,11 @@ export function activate(context: vscode.ExtensionContext): void {
           currentApply?.({ type: "PLAN_READY_RESOLVED" });
         } else if (message.type === "abort") {
           currentAc?.abort();
+        } else if (message.type === "slashCommand" && message.command) {
+          if (Object.hasOwn(SLASH_HANDLERS, message.command)) {
+            void SLASH_HANDLERS[message.command](message.args ?? "", context);
+          }
+          // unknown command → no-op (webview only dispatches known commands)
         }
       },
       undefined,
@@ -371,6 +376,30 @@ async function runPrompt(
       },
     });
   }
+}
+
+type SlashHandler = (args: string, context: vscode.ExtensionContext) => void | Promise<void>;
+
+// Slash-command handlers, keyed by command name. Add a future command as one entry.
+const SLASH_HANDLERS: Record<string, SlashHandler> = {
+  memory: handleMemoryCommand,
+};
+
+async function handleMemoryCommand(_args: string, _context: vscode.ExtensionContext): Promise<void> {
+  const folder = vscode.workspace.workspaceFolders?.[0];
+  if (!folder) {
+    void vscode.window.showInformationMessage("Open a folder first.");
+    return;
+  }
+  const uri = vscode.Uri.joinPath(folder.uri, ".zone", "memory.md");
+  try {
+    await vscode.workspace.fs.stat(uri);              // throws if missing
+  } catch {
+    void vscode.window.showInformationMessage("No .zone/memory.md found — run /init to create one.");
+    return;
+  }
+  const doc = await vscode.workspace.openTextDocument(uri);
+  await vscode.window.showTextDocument(doc, { preview: true });
 }
 
 export function deactivate(): void {

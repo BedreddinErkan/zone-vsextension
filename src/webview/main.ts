@@ -53,6 +53,7 @@ type VsCodeApi = {
     | { type: "toggleWebSearch" }
     | { type: "planDecision"; planId: string; runId: string; decision: string; feedback?: string }
     | { type: "abort" }
+    | { type: "slashCommand"; command: string; args: string }
   ): void;
 };
 
@@ -60,6 +61,12 @@ declare const acquireVsCodeApi: () => VsCodeApi;
 
 const DIFF_TOOLS = new Set(["apply_patch", "write_file", "multi_edit"]);
 const WRITE_FILE_PREVIEW_LINES = 7;
+
+// Slash-command registry — name → description (description is for the future
+// autocomplete dropdown; not rendered this increment). Append future commands here.
+const SLASH_COMMANDS: Record<string, string> = {
+  memory: "Show .zone/memory.md",
+};
 
 const vscode = acquireVsCodeApi();
 const transcriptEl = document.querySelector<HTMLDivElement>("#transcript") as HTMLDivElement;
@@ -293,6 +300,17 @@ promptInput.addEventListener("keydown", (event) => {
     event.preventDefault();
     const text = promptInput.value.trim();
     if (!text) return;
+    // Slash-command interception: known command → dispatch (not a prompt).
+    // Unknown "/x" or a non-leading slash falls through to the normal prompt.
+    if (text.startsWith("/")) {
+      const firstToken = text.slice(1).split(/\s+/)[0];
+      if (Object.hasOwn(SLASH_COMMANDS, firstToken)) {
+        const args = text.slice(1 + firstToken.length).trim();
+        vscode.postMessage({ type: "slashCommand", command: firstToken, args });
+        promptInput.value = "";          // clear composer; leave staged images intact
+        return;
+      }
+    }
     if (spinnerArea.classList.contains("active")) return;
     const images = stagedImages.length > 0
       ? stagedImages.map(({ mediaType, base64 }) => ({ mediaType, base64 }))
