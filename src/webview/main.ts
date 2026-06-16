@@ -43,7 +43,7 @@ type ControlsMessage = { type: "controls"; controls: Controls };
 
 type VsCodeApi = {
   postMessage(message:
-    | { type: "prompt"; text: string }
+    | { type: "prompt"; text: string; images?: { mediaType: string; base64: string }[] }
     | { type: "setKey"; provider: string }
     | { type: "setModel"; model: string }
     | { type: "setEffort"; effort: string }
@@ -78,6 +78,9 @@ const spinnerArea  = document.querySelector<HTMLSpanElement>("#spinner-area")  a
 const spinnerLabel = document.querySelector<HTMLSpanElement>("#spinner-label") as HTMLSpanElement;
 const stopBar      = document.querySelector<HTMLDivElement>("#stop-bar")       as HTMLDivElement;
 const stopBtn      = document.querySelector<HTMLButtonElement>("#stop-btn")    as HTMLButtonElement;
+const attachBtn    = document.querySelector<HTMLButtonElement>("#attach-btn")  as HTMLButtonElement;
+const attachInput  = document.querySelector<HTMLInputElement>("#attach-input") as HTMLInputElement;
+const stageChips   = document.querySelector<HTMLDivElement>("#stage-chips")    as HTMLDivElement;
 const statusText   = document.querySelector<HTMLSpanElement>("#status-text")   as HTMLSpanElement;
 const approvalPrompt     = document.querySelector<HTMLDivElement>("#approval-prompt")      as HTMLDivElement;
 const approvalCommandEl  = document.querySelector<HTMLElement>("#approval-command")        as HTMLElement;
@@ -109,9 +112,81 @@ stopBtn.addEventListener("click", () => {
   vscode.postMessage({ type: "abort" });
 });
 
+// ── Image staging helpers ─────────────────────────────────────────────────────
+
+const ALLOWED_MEDIA_TYPES = ["image/jpeg", "image/png", "image/gif", "image/webp"];
+
+function showAttachError(msg: string): void {
+  const el = document.createElement("span");
+  el.className = "attach-error";
+  el.textContent = msg;
+  stageChips.append(el);
+  setTimeout(() => el.remove(), 3000);
+}
+
+function renderChips(): void {
+  stageChips.textContent = "";
+  stagedImages.forEach((img, i) => {
+    const chip = document.createElement("span");
+    chip.className = "chip";
+    chip.textContent = img.label;
+    const rm = document.createElement("button");
+    rm.type = "button";
+    rm.className = "chip-remove";
+    rm.textContent = "×";
+    rm.addEventListener("click", () => { stagedImages.splice(i, 1); renderChips(); });
+    chip.append(rm);
+    stageChips.append(chip);
+  });
+}
+
+function addImage(base64: string, mediaType: string, label: string): void {
+  if (!ALLOWED_MEDIA_TYPES.includes(mediaType)) { showAttachError("Unsupported image type"); return; }
+  if (stagedImages.length >= 4) { showAttachError("Too many images (max 4)"); return; }
+  const byteLen = Math.ceil(base64.length * 3 / 4);
+  if (byteLen > 5 * 1024 * 1024) { showAttachError("Image exceeds 5 MB limit"); return; }
+  const totalBytes = stagedImages.reduce((sum, img) => sum + Math.ceil(img.base64.length * 3 / 4), 0);
+  if (totalBytes + byteLen > 16 * 1024 * 1024) { showAttachError("Total images exceed 16 MB limit"); return; }
+  stagedImages.push({ mediaType, base64, label });
+  renderChips();
+}
+
+function readFileAsImage(file: File, label: string): void {
+  const reader = new FileReader();
+  reader.addEventListener("load", () => {
+    const dataUrl = reader.result as string;
+    const commaIdx = dataUrl.indexOf(",");
+    const base64 = dataUrl.slice(commaIdx + 1);
+    const mediaType = dataUrl.slice(5, commaIdx).split(";")[0];
+    addImage(base64, mediaType, label);
+  });
+  reader.readAsDataURL(file);
+}
+
+attachBtn.addEventListener("click", () => { attachInput.value = ""; attachInput.click(); });
+
+attachInput.addEventListener("change", () => {
+  for (const file of Array.from(attachInput.files ?? [])) {
+    readFileAsImage(file, file.name);
+  }
+  attachInput.value = "";
+});
+
+promptInput.addEventListener("paste", (e) => {
+  const items = e.clipboardData?.items;
+  if (!items) return;
+  for (const item of Array.from(items)) {
+    if (item.type.startsWith("image/")) {
+      const file = item.getAsFile();
+      if (file) readFileAsImage(file, "pasted image");
+    }
+  }
+});
+
 // ── Dropdown state ────────────────────────────────────────────────────────────
 
 let activeDropdown: HTMLDivElement | null = null;
+let stagedImages: { mediaType: string; base64: string; label: string }[] = [];
 let currentControls: Controls | null = null;
 let currentPending: { approvalId: string; runId: string; command: string; kind?: string } | null = null;
 let currentMode: "default" | "auto" | "plan" = "default";
@@ -195,8 +270,13 @@ promptInput.addEventListener("keydown", (event) => {
     const text = promptInput.value.trim();
     if (!text) return;
     if (spinnerArea.classList.contains("active")) return;
-    vscode.postMessage({ type: "prompt", text });
+    const images = stagedImages.length > 0
+      ? stagedImages.map(({ mediaType, base64 }) => ({ mediaType, base64 }))
+      : undefined;
+    vscode.postMessage({ type: "prompt", text, ...(images ? { images } : {}) });
     promptInput.value = "";
+    stagedImages = [];
+    renderChips();
   }
 });
 

@@ -8,7 +8,7 @@ import { reducer, buildInitialState } from "zone/store-core";
 import { resolveCommandApproval, resolveEditApproval, resolvePlanApproval, type PlanDecision } from "zone/approvals";
 import type { StoreState, StoreAction } from "zone/store-core";
 import type { LlmPatchProgressUpdate, ZoneStructuredProgressEvent } from "zone/lifecycle";
-import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, type EffortLevel } from "zone/model-registry";
+import { USER_FACING_MODELS, effortLevelsFor, getProviderForModel, supportsVision, type EffortLevel } from "zone/model-registry";
 import {
   buildSessionWindow, truncateSessionTurn, truncateForContinuation,
   USER_PROMPT_MAX_BYTES, MAX_CHANGED_FILES,
@@ -23,6 +23,8 @@ let currentAc: AbortController | null = null;
 
 type Mode = "default" | "auto" | "plan";
 let currentMode: Mode = "default";
+
+type ImageAttachment = { mediaType: "image/jpeg" | "image/png" | "image/gif" | "image/webp"; base64: string };
 
 export function activate(context: vscode.ExtensionContext): void {
   const disposable = vscode.commands.registerCommand('zone.openPanel', () => {
@@ -42,10 +44,10 @@ export function activate(context: vscode.ExtensionContext): void {
     panel.webview.html = getHtml(panel.webview, context.extensionUri, getNonce());
 
     panel.webview.onDidReceiveMessage(
-      async (message: { type?: string; text?: string; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; kind?: string; mode?: string; planId?: string; decision?: string; feedback?: string }) => {
+      async (message: { type?: string; text?: string; images?: { mediaType: string; base64: string }[]; model?: string; effort?: string; provider?: string; approvalId?: string; runId?: string; approved?: boolean; kind?: string; mode?: string; planId?: string; decision?: string; feedback?: string }) => {
         if (message.type === "prompt" && typeof message.text === "string") {
           const text = message.text.trim();
-          if (text) void runPrompt(panel, text, context);
+          if (text) void runPrompt(panel, text, context, message.images as ImageAttachment[] | undefined);
         } else if (message.type === "setKey" && message.provider) {
           const provName = message.provider === "openai" ? "OpenAI" : "Anthropic";
           const v = await vscode.window.showInputBox({
@@ -165,6 +167,7 @@ async function runPrompt(
   panel: vscode.WebviewPanel,
   text: string,
   context: vscode.ExtensionContext,
+  images?: ImageAttachment[],
 ): Promise<void> {
   const built = await buildRunConfig(context);
   if (!built) {
@@ -266,6 +269,11 @@ async function runPrompt(
   };
 
   apply({ type: "USER_PROMPT", text });
+  if (images?.length && !supportsVision(config.model)) {
+    apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `[zone] model "${config.model}" doesn't support vision — switch to a vision-capable model` });
+    currentApply = null;
+    return;
+  }
   apply({ type: "SPINNER_START", label: "Starting…" });
 
   const ac = new AbortController();
@@ -279,6 +287,7 @@ async function runPrompt(
       mode: currentMode === "plan" ? "plan" : currentMode === "auto" ? "autoAccept" : "normal",
       editApprovalMode: currentMode === "default" ? "manual" : "auto",
       priorSessionSummary,
+      images,
     });
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -794,6 +803,50 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     #prompt:focus { border-color: var(--muted); }
 
+    #attach-area {
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 0 0;
+    }
+
+    #attach-btn {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 14px;
+      line-height: 1;
+      padding: 2px 4px;
+      flex-shrink: 0;
+    }
+    #attach-btn:hover { color: var(--text); }
+
+    #stage-chips { display: flex; flex-wrap: wrap; gap: 4px; flex: 1; }
+
+    .chip {
+      display: inline-flex;
+      align-items: center;
+      gap: 3px;
+      background: #1e1e2e;
+      border: 1px solid var(--muted);
+      border-radius: 3px;
+      color: #e5e7eb;
+      font-size: 11px;
+      padding: 1px 4px;
+    }
+    .chip-remove {
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1;
+      padding: 0 0 0 2px;
+    }
+    .chip-remove:hover { color: #ef4444; }
+    .attach-error { color: #ef4444; font-size: 11px; }
+
     /* ── Approval prompt ─────────────────────────────────── */
     #approval-prompt {
       flex-shrink: 0;
@@ -918,6 +971,11 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     </div>
     <form id="prompt-bar">
       <textarea id="prompt" rows="2" placeholder="Type a prompt · Enter to send · Shift+Enter newline"></textarea>
+      <div id="attach-area">
+        <button type="button" id="attach-btn" title="Attach image">📎</button>
+        <div id="stage-chips"></div>
+        <input type="file" id="attach-input" accept="image/png,image/jpeg,image/gif,image/webp" multiple hidden>
+      </div>
     </form>
   </main>
   <script nonce="${nonce}" src="${scriptUri}"></script>
