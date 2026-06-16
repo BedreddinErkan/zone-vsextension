@@ -439,17 +439,17 @@ async function handleInitCommand(ctx: SlashCtx): Promise<void> {
   try {
     const result = await runInitFlow(repoPath, (msg) => apply({ type: "SPINNER_UPDATE", label: msg }), ac.signal);
     if (ac.signal.aborted) {
-      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: "/init cancelled" });
+      void vscode.window.showInformationMessage("/init cancelled.");
     } else if (result.ok) {
-      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `✓ ${result.message}` });
+      void vscode.window.showInformationMessage("✓ Created .zone/memory.md");
       const uri = vscode.Uri.joinPath(vscode.Uri.file(repoPath), ".zone", "memory.md");
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: true });
     } else {
-      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `✗ ${result.message}` });
+      void vscode.window.showInformationMessage(result.message);
     }
   } catch (err) {
-    apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `✗ /init failed: ${err instanceof Error ? err.message : String(err)}` });
+    void vscode.window.showErrorMessage(`/init failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {
     apply({ type: "SPINNER_STOP" });
     currentApply = null;
