@@ -4,6 +4,7 @@
   "description": "AI coding agent for VS Code — BYOK, atomic file edits with /undo, daily cost cap",
   "version": "0.0.1",
   "publisher": "zonecli",
+  "icon": "icon.png",
   "license": "AGPL-3.0-or-later",
   "repository": {
     "type": "git",
