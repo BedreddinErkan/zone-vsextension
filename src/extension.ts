@@ -930,10 +930,35 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     /* ── Prompt bar ──────────────────────────────────── */
     #prompt-bar {
+      position: relative;            /* anchor the slash palette above the composer */
       border-top: 1px solid var(--border);
       padding: 10px;
       background: var(--bg);
     }
+
+    #slash-palette {
+      position: absolute;
+      bottom: calc(100% + 4px);
+      left: 10px;
+      right: 10px;
+      background: #12121a;
+      border: 1px solid var(--border);
+      border-radius: 4px;
+      z-index: 100;
+      overflow: hidden;
+    }
+    #slash-palette[hidden] { display: none; }
+
+    .slash-row {
+      display: flex;
+      align-items: baseline;
+      gap: 8px;
+      padding: 6px 10px;
+      cursor: pointer;
+    }
+    .slash-row.active { background: #1e1e28; }
+    .slash-cmd  { color: #a855f7; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; flex-shrink: 0; }
+    .slash-desc { color: var(--muted); font-size: 11px; }
 
     #prompt {
       display: block;
@@ -1125,6 +1150,7 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       <button type="button" id="stop-btn">Stop</button>
     </div>
     <form id="prompt-bar">
+      <div id="slash-palette" hidden></div>
       <textarea id="prompt" rows="2" placeholder="Type a prompt · Enter to send · Shift+Enter newline"></textarea>
       <div id="attach-area">
         <button type="button" id="attach-btn" title="Attach image">📎</button>

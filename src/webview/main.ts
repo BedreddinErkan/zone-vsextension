@@ -297,7 +297,70 @@ websearchBtn.addEventListener("click", () => {
   vscode.postMessage({ type: "toggleWebSearch" });
 });
 
+// ── Slash-command autocomplete palette ────────────────────────────────────────
+const slashPalette = document.querySelector<HTMLDivElement>("#slash-palette") as HTMLDivElement;
+let slashItems: { name: string; desc: string }[] = [];
+let slashIndex = 0;
+
+// Single dispatch point — used by both the palette and the Enter handler.
+function runSlashCommand(command: string, args: string): void {
+  vscode.postMessage({ type: "slashCommand", command, args });
+  promptInput.value = "";          // clear composer; leave staged images intact
+  closeSlashPalette();
+}
+
+function closeSlashPalette(): void {
+  slashPalette.hidden = true;
+  slashItems = [];
+  slashIndex = 0;
+}
+
+function renderSlashPalette(): void {
+  slashPalette.textContent = "";
+  slashItems.forEach((item, i) => {
+    const row = mkEl("div", "slash-row" + (i === slashIndex ? " active" : ""));
+    row.append(mkEl("span", "slash-cmd", "/" + item.name));
+    row.append(mkEl("span", "slash-desc", item.desc));
+    row.addEventListener("click", () => runSlashCommand(item.name, ""));
+    slashPalette.append(row);
+  });
+}
+
+function updateSlashPalette(): void {
+  // Match "/" + command token only (no space) → hides once args are typed or text isn't a leading-slash token.
+  const m = /^\/(\S*)$/.exec(promptInput.value);
+  if (!m) { closeSlashPalette(); return; }
+  const q = m[1].toLowerCase();
+  slashItems = Object.entries(SLASH_COMMANDS)
+    .filter(([name]) => name.startsWith(q))
+    .map(([name, desc]) => ({ name, desc }));
+  if (slashItems.length === 0) { closeSlashPalette(); return; }   // e.g. "/foo" → no palette → Enter sends normally
+  slashIndex = 0;
+  slashPalette.hidden = false;
+  renderSlashPalette();
+}
+
+function moveSlashHighlight(delta: number): void {
+  if (slashItems.length === 0) return;
+  slashIndex = (slashIndex + delta + slashItems.length) % slashItems.length;
+  renderSlashPalette();
+}
+
+promptInput.addEventListener("input", updateSlashPalette);
+
 promptInput.addEventListener("keydown", (event) => {
+  if (!slashPalette.hidden) {
+    if (event.key === "ArrowDown") { event.preventDefault(); moveSlashHighlight(1); return; }
+    if (event.key === "ArrowUp")   { event.preventDefault(); moveSlashHighlight(-1); return; }
+    if ((event.key === "Enter" && !event.shiftKey) || event.key === "Tab") {
+      event.preventDefault();
+      const it = slashItems[slashIndex];
+      if (it) runSlashCommand(it.name, "");
+      return;
+    }
+    if (event.key === "Escape") { event.preventDefault(); closeSlashPalette(); return; }
+    // other keys fall through → typed → input event re-filters
+  }
   if (event.key === "Enter" && !event.shiftKey) {
     event.preventDefault();
     const text = promptInput.value.trim();
@@ -308,8 +371,7 @@ promptInput.addEventListener("keydown", (event) => {
       const firstToken = text.slice(1).split(/\s+/)[0];
       if (Object.hasOwn(SLASH_COMMANDS, firstToken)) {
         const args = text.slice(1 + firstToken.length).trim();
-        vscode.postMessage({ type: "slashCommand", command: firstToken, args });
-        promptInput.value = "";          // clear composer; leave staged images intact
+        runSlashCommand(firstToken, args);   // shared dispatch point
         return;
       }
     }
