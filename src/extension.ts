@@ -752,11 +752,77 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     /* Thinking */
     .entry-thinking { color: var(--muted); font-style: italic; }
 
-    /* Assistant final */
+    /* Assistant final — summary card */
     .entry-assistant-final {
       padding-top: 8px;
       margin-top: 2px;
       border-top: 1px solid var(--border);
+    }
+    .summary-card {
+      position: relative;
+      background: #12121a;
+      border: 1px solid var(--border);
+      border-radius: 3px;
+      padding: 10px 14px 12px 18px;
+      margin-top: 6px;
+      overflow: hidden;
+    }
+    .summary-card::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 3px;
+      background: linear-gradient(to bottom, #ec4899, #a855f7, #6366f1, #22d3ee);
+      border-radius: 3px 0 0 3px;
+    }
+    .summary-heading {
+      color: #a855f7;
+      font-size: 10px;
+      font-weight: 600;
+      letter-spacing: 0.1em;
+      text-transform: uppercase;
+      font-variant: small-caps;
+      margin: 12px 0 4px;
+    }
+    .summary-heading:first-child {
+      margin-top: 2px;
+    }
+    .summary-paragraph {
+      color: var(--text);
+      line-height: 1.6;
+      margin: 4px 0;
+      white-space: pre-wrap;
+    }
+    .summary-bullet {
+      display: flex;
+      gap: 7px;
+      align-items: baseline;
+      margin: 3px 0;
+      line-height: 1.55;
+    }
+    .summary-bullet-marker {
+      color: #a855f7;
+      flex-shrink: 0;
+      font-size: 13px;
+      opacity: 0.75;
+    }
+    .summary-bullet-body {
+      color: var(--text);
+      flex: 1;
+    }
+    .summary-inline-code {
+      background: rgba(255,255,255,0.06);
+      color: #22d3ee;
+      font-family: var(--mono);
+      font-size: 0.88em;
+      padding: 1px 4px;
+      border-radius: 3px;
+    }
+    .summary-inline-bold {
+      font-weight: 600;
+      color: var(--text);
     }
 
     /* Tool call block */

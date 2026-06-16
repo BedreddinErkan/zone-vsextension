@@ -498,6 +498,117 @@ function mkEl<K extends keyof HTMLElementTagNameMap>(
   return e;
 }
 
+// ── Summary card renderer ─────────────────────────────────────────────────────
+
+type InlineSegment =
+  | { kind: "text"; text: string }
+  | { kind: "code"; text: string }
+  | { kind: "bold"; text: string };
+
+type BlockToken =
+  | { kind: "heading"; text: string }
+  | { kind: "bullet"; segments: InlineSegment[] }
+  | { kind: "paragraph"; segments: InlineSegment[] };
+
+function parseInline(raw: string): InlineSegment[] {
+  const segments: InlineSegment[] = [];
+  const re = /`([^`]*)`|\*\*([^*]+)\*\*/g;
+  let last = 0;
+  let m: RegExpExecArray | null;
+  while ((m = re.exec(raw)) !== null) {
+    if (m.index > last) {
+      segments.push({ kind: "text", text: raw.slice(last, m.index) });
+    }
+    if (m[1] !== undefined) {
+      segments.push({ kind: "code", text: m[1] });
+    } else {
+      segments.push({ kind: "bold", text: m[2] });
+    }
+    last = re.lastIndex;
+  }
+  if (last < raw.length) {
+    segments.push({ kind: "text", text: raw.slice(last) });
+  }
+  return segments;
+}
+
+function tokenizeMarkdown(text: string): BlockToken[] {
+  const tokens: BlockToken[] = [];
+  const lines = text.split("\n");
+  let paraLines: string[] = [];
+
+  function flushParagraph() {
+    if (paraLines.length === 0) { return; }
+    tokens.push({ kind: "paragraph", segments: parseInline(paraLines.join("\n")) });
+    paraLines = [];
+  }
+
+  for (const line of lines) {
+    if (/^#{1,3} /.test(line)) {
+      flushParagraph();
+      tokens.push({ kind: "heading", text: line.replace(/^#{1,3} /, "") });
+    } else if (/^[-*] /.test(line)) {
+      flushParagraph();
+      tokens.push({ kind: "bullet", segments: parseInline(line.slice(2)) });
+    } else if (line.trim() === "") {
+      flushParagraph();
+    } else {
+      paraLines.push(line);
+    }
+  }
+  flushParagraph();
+  return tokens;
+}
+
+function appendInlineSegments(container: HTMLElement, segments: InlineSegment[]) {
+  for (const seg of segments) {
+    if (seg.kind === "code") {
+      const span = document.createElement("span");
+      span.className = "summary-inline-code";
+      span.textContent = seg.text;
+      container.appendChild(span);
+    } else if (seg.kind === "bold") {
+      const strong = document.createElement("strong");
+      strong.className = "summary-inline-bold";
+      strong.textContent = seg.text;
+      container.appendChild(strong);
+    } else {
+      container.appendChild(document.createTextNode(seg.text));
+    }
+  }
+}
+
+function buildSummaryCard(text: string): HTMLElement {
+  const card = document.createElement("div");
+  card.className = "entry entry-assistant-final summary-card";
+  for (const token of tokenizeMarkdown(text)) {
+    if (token.kind === "heading") {
+      const h = document.createElement("div");
+      h.className = "summary-heading";
+      h.textContent = token.text;
+      card.appendChild(h);
+    } else if (token.kind === "bullet") {
+      const row = document.createElement("div");
+      row.className = "summary-bullet";
+      const marker = document.createElement("span");
+      marker.className = "summary-bullet-marker";
+      marker.textContent = "›";
+      const body = document.createElement("span");
+      body.className = "summary-bullet-body";
+      appendInlineSegments(body, token.segments);
+      row.appendChild(marker);
+      row.appendChild(body);
+      card.appendChild(row);
+    } else {
+      const p = document.createElement("div");
+      p.className = "summary-paragraph";
+      appendInlineSegments(p, token.segments);
+      card.appendChild(p);
+    }
+  }
+  return card;
+}
+
 function syncActionBar(): void {
   if (spinnerActive) {
     stopBar.hidden = false;
@@ -665,7 +776,7 @@ function renderEntry(entry: TranscriptEntry, idx = -1): void {
       transcriptEl.append(mkEl("div", "entry entry-thinking", entry.text));
       break;
     case "assistant_final":
-      transcriptEl.append(mkEl("div", "entry entry-assistant-final", entry.text));
+      transcriptEl.append(buildSummaryCard(entry.text));
       break;
     case "tool_call": {
       const wrap = mkEl("div", "entry entry-tool");
