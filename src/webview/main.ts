@@ -37,6 +37,7 @@ type Controls = {
   keySet: boolean;
   models: { id: string; displayName: string; provider: "openai" | "anthropic" }[];
   efforts: string[];
+  undoable: boolean;
 };
 
 type StateMessage = { type: "state"; state: StoreState };
@@ -54,6 +55,7 @@ type VsCodeApi = {
     | { type: "planDecision"; planId: string; runId: string; decision: string; feedback?: string }
     | { type: "abort" }
     | { type: "slashCommand"; command: string; args: string }
+    | { type: "undo" }
   ): void;
 };
 
@@ -90,6 +92,7 @@ const spinnerArea  = document.querySelector<HTMLSpanElement>("#spinner-area")  a
 const spinnerLabel = document.querySelector<HTMLSpanElement>("#spinner-label") as HTMLSpanElement;
 const stopBar      = document.querySelector<HTMLDivElement>("#stop-bar")       as HTMLDivElement;
 const stopBtn      = document.querySelector<HTMLButtonElement>("#stop-btn")    as HTMLButtonElement;
+const undoBtn      = document.querySelector<HTMLButtonElement>("#undo-btn")    as HTMLButtonElement;
 const attachBtn    = document.querySelector<HTMLButtonElement>("#attach-btn")  as HTMLButtonElement;
 const attachInput  = document.querySelector<HTMLInputElement>("#attach-input") as HTMLInputElement;
 const stageChips   = document.querySelector<HTMLDivElement>("#stage-chips")    as HTMLDivElement;
@@ -124,6 +127,10 @@ stopBtn.addEventListener("click", () => {
   stopBtn.disabled = true;
   stopBtn.textContent = "stopping…";
   vscode.postMessage({ type: "abort" });
+});
+
+undoBtn.addEventListener("click", () => {
+  vscode.postMessage({ type: "undo" });
 });
 
 // ── Image staging helpers ─────────────────────────────────────────────────────
@@ -221,6 +228,7 @@ let currentControls: Controls | null = null;
 let currentPending: { approvalId: string; runId: string; command: string; kind?: string } | null = null;
 let currentMode: "default" | "auto" | "plan" = "default";
 let currentPlanReady: { planId: string; runId: string } | null = null;
+let spinnerActive = false;
 
 function toggleDropdown(dd: HTMLDivElement): void {
   if (activeDropdown && activeDropdown !== dd) activeDropdown.classList.remove("open");
@@ -464,6 +472,8 @@ function renderControls(c: Controls): void {
     });
     effortDropdown.append(item);
   }
+
+  syncActionBar();
 }
 
 // ── Transcript renderer ───────────────────────────────────────────────────────
@@ -475,6 +485,20 @@ function mkEl<K extends keyof HTMLElementTagNameMap>(
   if (className) e.className = className;
   if (text !== undefined) e.textContent = text;
   return e;
+}
+
+function syncActionBar(): void {
+  if (spinnerActive) {
+    stopBar.hidden = false;
+    stopBtn.hidden = false;
+    undoBtn.hidden = true;
+  } else if (currentControls?.undoable) {
+    stopBar.hidden = false;
+    stopBtn.hidden = true;
+    undoBtn.hidden = false;
+  } else {
+    stopBar.hidden = true;
+  }
 }
 
 function formatStatus(sb: StatusBar): string {
@@ -492,16 +516,16 @@ function renderState(state: StoreState): void {
   lastTranscriptLen = state.transcript.length;
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 
+  spinnerActive = !!state.spinner;
   if (state.spinner) {
     spinnerArea.classList.add("active");
     spinnerLabel.textContent = state.spinner.label;
-    stopBar.hidden = false;
   } else {
     spinnerArea.classList.remove("active");
-    stopBar.hidden = true;
     stopBtn.disabled = false;
     stopBtn.textContent = "Stop";
   }
+  syncActionBar();
 
   statusText.innerHTML = formatStatus(state.statusBar);
 

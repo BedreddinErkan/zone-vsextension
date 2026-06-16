@@ -90,6 +90,8 @@ export function activate(context: vscode.ExtensionContext): void {
           currentApply?.({ type: "PLAN_READY_RESOLVED" });
         } else if (message.type === "abort") {
           currentAc?.abort();
+        } else if (message.type === "undo") {
+          void performUndo(panel, context);
         } else if (message.type === "slashCommand" && message.command) {
           if (Object.hasOwn(SLASH_HANDLERS, message.command)) {
             void SLASH_HANDLERS[message.command]({ args: message.args ?? "", panel, context });
@@ -164,6 +166,13 @@ async function postControls(
     keySet = !!(await context.secrets.get("zone.key.anthropic"));
   }
 
+  const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  let undoable = false;
+  if (repoPath && currentRunId) {
+    const snapshots = await listSnapshots(repoPath);
+    undoable = snapshots.some((s) => s.runId === currentRunId && !s.undone);
+  }
+
   void panel.webview.postMessage({
     type: "controls",
     controls: {
@@ -175,6 +184,7 @@ async function postControls(
       keySet,
       models: USER_FACING_MODELS.map((m) => ({ id: m.id, displayName: m.displayName, provider: m.provider })),
       efforts,
+      undoable,
     },
   });
 }
@@ -338,6 +348,7 @@ async function runPrompt(
               title: "Run ended" } as ZoneStructuredProgressEvent);
     }
     currentAc = null;
+    void postControls(panel, context);   // refresh undoable button state after run
   }
 
   // Persist turn record for cross-turn memory; capture sessionId locally to guard
@@ -485,7 +496,10 @@ async function handleFeedbackCommand(ctx: SlashCtx): Promise<void> {
   void vscode.window.showInformationMessage("Feedback draft opened (copied to clipboard).");
 }
 
-async function handleUndoCommand(_ctx: SlashCtx): Promise<void> {
+async function performUndo(
+  panel: vscode.WebviewPanel,
+  context: vscode.ExtensionContext,
+): Promise<void> {
   // Run-active guard — restoring mid-run corrupts the run (same rationale as /init).
   if (currentAc) { void vscode.window.showInformationMessage("Can't undo while a run is in progress."); return; }
   if (!currentRunId) { void vscode.window.showInformationMessage("Nothing to undo yet."); return; }
@@ -515,9 +529,14 @@ async function handleUndoCommand(_ctx: SlashCtx): Promise<void> {
     const result = await restoreSnapshot(currentRunId, repoPath);
     if (result.alreadyUndone) { void vscode.window.showInformationMessage("Already undone."); return; }
     void vscode.window.showInformationMessage(`✓ Undid last run — restored ${result.reverted} file${result.reverted === 1 ? "" : "s"}.`);
+    void postControls(panel, context);   // snapshot is now undone → disable button
   } catch (err) {
     void vscode.window.showErrorMessage(`Undo failed: ${err instanceof Error ? err.message : String(err)}`);
   }
+}
+
+async function handleUndoCommand(ctx: SlashCtx): Promise<void> {
+  return performUndo(ctx.panel, ctx.context);
 }
 
 export function deactivate(): void {
@@ -950,6 +969,18 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     #stop-btn:hover:not(:disabled) { background: rgba(239,68,68,.15); }
     #stop-btn:disabled { border-color: var(--muted); color: var(--muted); cursor: default; }
 
+    #undo-btn {
+      background: none;
+      border: 1px solid var(--muted);
+      border-radius: 3px;
+      color: var(--muted);
+      cursor: pointer;
+      font-size: 11px;
+      line-height: 1;
+      padding: 2px 8px;
+    }
+    #undo-btn:hover { background: rgba(107,114,128,.15); }
+
     #spinner-glyph {
       width: 10px;
       height: 10px;
@@ -1185,6 +1216,7 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
     </div>
     <div id="stop-bar" hidden>
       <button type="button" id="stop-btn">Stop</button>
+      <button type="button" id="undo-btn" hidden>Undo</button>
     </div>
     <form id="prompt-bar">
       <div id="slash-palette" hidden></div>
