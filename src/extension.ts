@@ -3,6 +3,7 @@ import { randomUUID } from "crypto";
 import { runOneShotInner } from "zone/dispatch";
 import { runInitFlow } from "zone/init";
 import { restoreSnapshot, listSnapshots, getDriftedPaths } from "zone/snapshots";
+import { writeDailyUsdCapOverride, readDailyUsdCapOverride } from "zone/tier-settings";
 import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
 import type { CliConfig } from "zone/config";
 import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
@@ -90,6 +91,8 @@ export function activate(context: vscode.ExtensionContext): void {
           currentApply?.({ type: "PLAN_READY_RESOLVED" });
         } else if (message.type === "abort") {
           currentAc?.abort();
+        } else if (message.type === "setDailyCap") {
+          await openCapModal(panel, context);
         } else if (message.type === "undo") {
           void performUndo(panel, context);
         } else if (message.type === "slashCommand" && message.command) {
@@ -173,6 +176,8 @@ async function postControls(
     undoable = snapshots.some((s) => s.runId === currentRunId && !s.undone);
   }
 
+  const dailyCap = readDailyUsdCapOverride() ?? 0;   // 0 = no override set
+
   void panel.webview.postMessage({
     type: "controls",
     controls: {
@@ -185,6 +190,7 @@ async function postControls(
       models: USER_FACING_MODELS.map((m) => ({ id: m.id, displayName: m.displayName, provider: m.provider })),
       efforts,
       undoable,
+      dailyCap,
     },
   });
 }
@@ -402,6 +408,7 @@ const SLASH_HANDLERS: Record<string, SlashHandler> = {
   init: handleInitCommand,
   feedback: handleFeedbackCommand,
   undo: handleUndoCommand,
+  limits: handleLimitsCommand,
 };
 
 async function handleMemoryCommand(_ctx: SlashCtx): Promise<void> {
@@ -537,6 +544,31 @@ async function performUndo(
 
 async function handleUndoCommand(ctx: SlashCtx): Promise<void> {
   return performUndo(ctx.panel, ctx.context);
+}
+
+async function openCapModal(
+  panel: vscode.WebviewPanel,
+  context: vscode.ExtensionContext,
+): Promise<void> {
+  const current = readDailyUsdCapOverride() ?? 0;
+  const v = await vscode.window.showInputBox({
+    prompt: "Daily USD spending cap — blank for no cap",
+    value: current > 0 ? String(current) : "",
+    validateInput: (s) => {
+      if (!s.trim()) return null;
+      const n = Number(s.trim());
+      if (!Number.isFinite(n) || n < 0) return "Enter a positive number or leave blank for no cap";
+      return null;
+    },
+  });
+  if (v === undefined) return;   // cancelled
+  const cap = v.trim() ? Math.max(0, Number(v.trim())) : 0;
+  writeDailyUsdCapOverride(cap);   // 0 = explicit "no cap" override (resolver treats 0 as unlimited)
+  void postControls(panel, context);
+}
+
+async function handleLimitsCommand(ctx: SlashCtx): Promise<void> {
+  return openCapModal(ctx.panel, ctx.context);
 }
 
 export function deactivate(): void {
@@ -1167,6 +1199,11 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
         <div class="ctrl" id="websearch-ctrl">
           <button class="ctrl-btn" id="websearch-btn" type="button" data-enabled="true">
             <span id="websearch-label">web: on</span>
+          </button>
+        </div>
+        <div class="ctrl" id="cap-ctrl">
+          <button class="ctrl-btn" id="cap-btn" type="button">
+            <span id="cap-label">no cap</span>
           </button>
         </div>
         <div class="ctrl" id="effort-ctrl" hidden>

@@ -38,6 +38,7 @@ type Controls = {
   models: { id: string; displayName: string; provider: "openai" | "anthropic" }[];
   efforts: string[];
   undoable: boolean;
+  dailyCap: number;
 };
 
 type StateMessage = { type: "state"; state: StoreState };
@@ -56,6 +57,7 @@ type VsCodeApi = {
     | { type: "abort" }
     | { type: "slashCommand"; command: string; args: string }
     | { type: "undo" }
+    | { type: "setDailyCap" }
   ): void;
 };
 
@@ -71,6 +73,7 @@ const SLASH_COMMANDS: Record<string, string> = {
   init: "Scaffold .zone/memory.md by analyzing the repo",
   feedback: "Send a bug report / feedback to the maintainer",
   undo: "Undo the last run (restore files to pre-run state)",
+  limits: "Set a daily USD spending cap",
 };
 
 const vscode = acquireVsCodeApi();
@@ -107,6 +110,8 @@ const modeBtn        = document.querySelector<HTMLButtonElement>("#mode-btn")   
 const modeLabel      = document.querySelector<HTMLSpanElement>("#mode-label")          as HTMLSpanElement;
 const websearchBtn   = document.querySelector<HTMLButtonElement>("#websearch-btn")     as HTMLButtonElement;
 const websearchLabel = document.querySelector<HTMLSpanElement>("#websearch-label")     as HTMLSpanElement;
+const capBtn         = document.querySelector<HTMLButtonElement>("#cap-btn")           as HTMLButtonElement;
+const capLabel       = document.querySelector<HTMLSpanElement>("#cap-label")           as HTMLSpanElement;
 const planReadyEl    = document.querySelector<HTMLDivElement>("#plan-ready")           as HTMLDivElement;
 const planObjEl      = document.querySelector<HTMLDivElement>("#plan-ready-objective") as HTMLDivElement;
 const planStepsEl    = document.querySelector<HTMLOListElement>("#plan-ready-steps")   as HTMLOListElement;
@@ -306,6 +311,10 @@ websearchBtn.addEventListener("click", () => {
   vscode.postMessage({ type: "toggleWebSearch" });
 });
 
+capBtn.addEventListener("click", () => {
+  vscode.postMessage({ type: "setDailyCap" });
+});
+
 // ── Slash-command autocomplete palette ────────────────────────────────────────
 const slashPalette = document.querySelector<HTMLDivElement>("#slash-palette") as HTMLDivElement;
 let slashItems: { name: string; desc: string }[] = [];
@@ -418,6 +427,8 @@ function renderControls(c: Controls): void {
 
   websearchLabel.textContent = c.webSearchEnabled ? "web: on" : "web: off";
   websearchBtn.dataset["enabled"] = String(c.webSearchEnabled);
+
+  capLabel.textContent = c.dailyCap > 0 ? `cap: $${c.dailyCap}` : "no cap";
 
   modelLabel.textContent = c.model;
   providerLabel.textContent = c.provider;
