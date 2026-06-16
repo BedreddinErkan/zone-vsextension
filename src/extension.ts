@@ -1,6 +1,7 @@
 import * as vscode from 'vscode';
 import { randomUUID } from "crypto";
 import { runOneShotInner } from "zone/dispatch";
+import { runInitFlow } from "zone/init";
 import { loadCliConfig, applyDiskKeyFallbacks } from "zone/config";
 import type { CliConfig } from "zone/config";
 import { eventToActions, type EventCtx, type ResolverIntent } from "zone/events";
@@ -89,7 +90,7 @@ export function activate(context: vscode.ExtensionContext): void {
           currentAc?.abort();
         } else if (message.type === "slashCommand" && message.command) {
           if (Object.hasOwn(SLASH_HANDLERS, message.command)) {
-            void SLASH_HANDLERS[message.command](message.args ?? "", context);
+            void SLASH_HANDLERS[message.command]({ args: message.args ?? "", panel, context });
           }
           // unknown command → no-op (webview only dispatches known commands)
         }
@@ -378,14 +379,16 @@ async function runPrompt(
   }
 }
 
-type SlashHandler = (args: string, context: vscode.ExtensionContext) => void | Promise<void>;
+type SlashCtx = { args: string; panel: vscode.WebviewPanel; context: vscode.ExtensionContext };
+type SlashHandler = (ctx: SlashCtx) => void | Promise<void>;
 
 // Slash-command handlers, keyed by command name. Add a future command as one entry.
 const SLASH_HANDLERS: Record<string, SlashHandler> = {
   memory: handleMemoryCommand,
+  init: handleInitCommand,
 };
 
-async function handleMemoryCommand(_args: string, _context: vscode.ExtensionContext): Promise<void> {
+async function handleMemoryCommand(_ctx: SlashCtx): Promise<void> {
   const folder = vscode.workspace.workspaceFolders?.[0];
   if (!folder) {
     void vscode.window.showInformationMessage("Open a folder first.");
@@ -400,6 +403,59 @@ async function handleMemoryCommand(_args: string, _context: vscode.ExtensionCont
   }
   const doc = await vscode.workspace.openTextDocument(uri);
   await vscode.window.showTextDocument(doc, { preview: true });
+}
+
+async function handleInitCommand(ctx: SlashCtx): Promise<void> {
+  // Run-active guard — /init starts a run; no concurrent runs.
+  if (currentAc) { void vscode.window.showInformationMessage("A run is already in progress — wait for it to finish."); return; }
+  // Canonical resolution — same provider+model+key (and repoPath) as a normal run.
+  const built = await buildRunConfig(ctx.context);
+  if (!built) { void vscode.window.showInformationMessage("Open a folder first."); return; }
+  const { config, repoPath } = built;
+  const panel = ctx.panel;
+
+  // Panel store wiring (mirror runPrompt's apply machinery)
+  if (!currentState) currentState = buildInitialState({ model: config.model, capUsd: 100 });
+  const apply = (action: StoreAction) => {
+    currentState = reducer(currentState!, action);
+    void panel.webview.postMessage({ type: "state", state: currentState });
+  };
+  currentApply = apply;
+
+  const ac = new AbortController();
+  currentAc = ac;                                   // Stop button aborts /init via this signal
+  apply({ type: "USER_PROMPT", text: "/init" });
+  apply({ type: "SPINNER_START", label: "Analyzing repo…" });
+
+  // Env bridge: runInitFlow's loadCliConfig reads ZONE_MODEL (pins provider) +
+  // OPENAI/ANTHROPIC_API_KEY from env, NOT VS Code secrets. Populate from the
+  // already-resolved config (canonical key), restore in finally.
+  const keyEnv = config.provider === "openai" ? "OPENAI_API_KEY" : "ANTHROPIC_API_KEY";
+  const key = config.provider === "openai" ? config.openaiApiKey : config.anthropicApiKey;
+  const prev: Record<string, string | undefined> = { ZONE_MODEL: process.env["ZONE_MODEL"], [keyEnv]: process.env[keyEnv] };
+  process.env["ZONE_MODEL"] = config.model;
+  if (key) process.env[keyEnv] = key;
+
+  try {
+    const result = await runInitFlow(repoPath, (msg) => apply({ type: "SPINNER_UPDATE", label: msg }), ac.signal);
+    if (ac.signal.aborted) {
+      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: "/init cancelled" });
+    } else if (result.ok) {
+      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `✓ ${result.message}` });
+      const uri = vscode.Uri.joinPath(vscode.Uri.file(repoPath), ".zone", "memory.md");
+      const doc = await vscode.workspace.openTextDocument(uri);
+      await vscode.window.showTextDocument(doc, { preview: true });
+    } else {
+      apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `✗ ${result.message}` });
+    }
+  } catch (err) {
+    apply({ type: "TRANSCRIPT_APPEND_NARRATION", text: `✗ /init failed: ${err instanceof Error ? err.message : String(err)}` });
+  } finally {
+    apply({ type: "SPINNER_STOP" });
+    currentApply = null;
+    currentAc = null;
+    for (const [k, v] of Object.entries(prev)) { if (v === undefined) delete process.env[k]; else process.env[k] = v; }
+  }
 }
 
 export function deactivate(): void {

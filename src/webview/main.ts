@@ -66,6 +66,7 @@ const WRITE_FILE_PREVIEW_LINES = 7;
 // autocomplete dropdown; not rendered this increment). Append future commands here.
 const SLASH_COMMANDS: Record<string, string> = {
   memory: "Show .zone/memory.md",
+  init: "Scaffold .zone/memory.md by analyzing the repo",
 };
 
 const vscode = acquireVsCodeApi();
