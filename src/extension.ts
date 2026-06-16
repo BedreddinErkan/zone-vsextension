@@ -732,6 +732,15 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
 
     #spinner-label { color: #e5e7eb; }
 
+    #stop-bar {
+      display: flex;
+      justify-content: flex-end;
+      padding: 4px 10px;
+      border-top: 1px solid var(--border);
+      background: var(--bg);
+    }
+    #stop-bar[hidden] { display: none; }
+
     #stop-btn {
       background: none;
       border: 1px solid #ef4444;
@@ -740,9 +749,10 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       cursor: pointer;
       font-size: 11px;
       line-height: 1;
-      padding: 1px 5px;
+      padding: 2px 8px;
     }
-    #stop-btn:hover { background: rgba(239,68,68,.15); }
+    #stop-btn:hover:not(:disabled) { background: rgba(239,68,68,.15); }
+    #stop-btn:disabled { border-color: var(--muted); color: var(--muted); cursor: default; }
 
     #spinner-glyph {
       width: 10px;
@@ -877,7 +887,6 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
       <span id="spinner-area">
         <span id="spinner-glyph"></span>
         <span id="spinner-label"></span>
-        <button type="button" id="stop-btn" hidden>stop</button>
       </span>
       <span id="status-text"></span>
     </div>
@@ -903,6 +912,9 @@ function getHtml(webview: vscode.Webview, extensionUri: vscode.Uri, nonce: strin
         <button type="button" id="approval-approve">Approve  [Enter]</button>
         <button type="button" id="approval-deny">Deny  [Esc]</button>
       </div>
+    </div>
+    <div id="stop-bar" hidden>
+      <button type="button" id="stop-btn">Stop</button>
     </div>
     <form id="prompt-bar">
       <textarea id="prompt" rows="2" placeholder="Type a prompt · Enter to send · Shift+Enter newline"></textarea>

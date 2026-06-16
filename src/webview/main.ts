@@ -76,6 +76,7 @@ const modelDropdown = document.querySelector<HTMLDivElement>("#model-dropdown") 
 const effortDropdown = document.querySelector<HTMLDivElement>("#effort-dropdown") as HTMLDivElement;
 const spinnerArea  = document.querySelector<HTMLSpanElement>("#spinner-area")  as HTMLSpanElement;
 const spinnerLabel = document.querySelector<HTMLSpanElement>("#spinner-label") as HTMLSpanElement;
+const stopBar      = document.querySelector<HTMLDivElement>("#stop-bar")       as HTMLDivElement;
 const stopBtn      = document.querySelector<HTMLButtonElement>("#stop-btn")    as HTMLButtonElement;
 const statusText   = document.querySelector<HTMLSpanElement>("#status-text")   as HTMLSpanElement;
 const approvalPrompt     = document.querySelector<HTMLDivElement>("#approval-prompt")      as HTMLDivElement;
@@ -102,6 +103,9 @@ if (!transcriptEl || !promptInput) {
 }
 
 stopBtn.addEventListener("click", () => {
+  if (stopBtn.disabled) return;
+  stopBtn.disabled = true;
+  stopBtn.textContent = "stopping…";
   vscode.postMessage({ type: "abort" });
 });
 
@@ -299,10 +303,12 @@ function renderState(state: StoreState): void {
   if (state.spinner) {
     spinnerArea.classList.add("active");
     spinnerLabel.textContent = state.spinner.label;
-    stopBtn.hidden = false;
+    stopBar.hidden = false;
   } else {
     spinnerArea.classList.remove("active");
-    stopBtn.hidden = true;
+    stopBar.hidden = true;
+    stopBtn.disabled = false;
+    stopBtn.textContent = "Stop";
   }
 
   statusText.innerHTML = formatStatus(state.statusBar);
