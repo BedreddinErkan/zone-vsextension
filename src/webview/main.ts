@@ -74,6 +74,7 @@ const SLASH_COMMANDS: Record<string, string> = {
   feedback: "Send a bug report / feedback to the maintainer",
   undo: "Undo the last run (restore files to pre-run state)",
   limits: "Set a daily USD spending cap",
+  metrics: "Show run + session usage (cost, tokens, iterations)",
 };
 
 const vscode = acquireVsCodeApi();

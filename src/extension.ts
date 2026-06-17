@@ -24,6 +24,9 @@ let currentState: StoreState | null = null;
 let currentSessionId: string | null = null;
 let currentAc: AbortController | null = null;
 let currentRunId: string | null = null;   // last run's id (snapshot key) — for /feedback, /undo
+let sessionRuns = 0;
+let sessionCostUsd = 0;
+let sessionTokens = 0;
 
 type Mode = "default" | "auto" | "plan";
 let currentMode: Mode = "default";
@@ -354,6 +357,9 @@ async function runPrompt(
               title: "Run ended" } as ZoneStructuredProgressEvent);
     }
     currentAc = null;
+    sessionRuns += 1;
+    sessionCostUsd += currentState?.statusBar.costUsd ?? 0;
+    sessionTokens += currentState?.statusBar.cumulativeTokens ?? 0;
     void postControls(panel, context);   // refresh undoable button state after run
   }
 
@@ -409,6 +415,7 @@ const SLASH_HANDLERS: Record<string, SlashHandler> = {
   feedback: handleFeedbackCommand,
   undo: handleUndoCommand,
   limits: handleLimitsCommand,
+  metrics: handleMetricsCommand,
 };
 
 async function handleMemoryCommand(_ctx: SlashCtx): Promise<void> {
@@ -569,6 +576,38 @@ async function openCapModal(
 
 async function handleLimitsCommand(ctx: SlashCtx): Promise<void> {
   return openCapModal(ctx.panel, ctx.context);
+}
+
+function handleMetricsCommand(ctx: SlashCtx): void {
+  if (!currentState) {
+    void vscode.window.showInformationMessage("No run data yet — complete a run first.");
+    return;
+  }
+  const sb = currentState.statusBar;
+  const fmtTokens = (n: number): string =>
+    n === 0 ? "n/a" : `~${(n / 1000).toFixed(1)}k`;
+  const fmtCost = (n: number): string => `${n.toFixed(4)}`;
+
+  const md = [
+    "## Metrics",
+    "### Last run",
+    `- Cost: ${fmtCost(sb.costUsd)}`,
+    `- Iterations: ${(sb as unknown as { iter: number }).iter ?? 0}`,
+    `- Tokens: ${fmtTokens(sb.cumulativeTokens)} (approx)`,
+    `- Model: ${(sb as unknown as { model: string }).model ?? "unknown"}`,
+    "### This session",
+    `- Runs: ${sessionRuns}`,
+    `- Total cost: ${fmtCost(sessionCostUsd)}`,
+    `- Total tokens: ${fmtTokens(sessionTokens)}`,
+  ].join("\n");
+
+  const panel = ctx.panel;
+  const apply = (action: StoreAction) => {
+    currentState = reducer(currentState!, action);
+    void panel.webview.postMessage({ type: "state", state: currentState });
+  };
+  apply({ type: "USER_PROMPT", text: "/metrics" });
+  apply({ type: "ASSISTANT_FINAL", text: md });
 }
 
 export function deactivate(): void {
