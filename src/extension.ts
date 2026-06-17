@@ -17,6 +17,7 @@ import {
   USER_PROMPT_MAX_BYTES, MAX_CHANGED_FILES,
 } from "zone/session-window";
 import { readFsConversationEvents, appendFsConversationEvent } from "zone/conversation-store";
+import { buildFeedbackReport } from "zone/feedback";
 
 let currentPanel: vscode.WebviewPanel | undefined;
 let currentApply: ((action: StoreAction) => void) | null = null;
@@ -489,25 +490,39 @@ async function handleInitCommand(ctx: SlashCtx): Promise<void> {
 }
 
 async function handleFeedbackCommand(ctx: SlashCtx): Promise<void> {
+  let userMessage = ctx.args.trim();
+  if (!userMessage) {
+    const input = await vscode.window.showInputBox({
+      prompt: "Describe the issue / feedback",
+      ignoreFocusOut: true,
+    });
+    if (input === undefined) return;
+    userMessage = input;
+  }
+
   const version = (ctx.context.extension.packageJSON as { version?: string }).version ?? "unknown";
-  const model = ctx.context.workspaceState.get<string>("zone.model", "gpt-5.5");
-  const body =
-    "Describe the issue:\n\n\n" +
-    "---\n" +
-    "Diagnostics:\n" +
-    `- Extension: zone-vscode ${version}\n` +
-    `- Model: ${model}\n` +
-    `- Last run: ${currentRunId ?? "none"}\n` +
-    `- Platform: ${process.platform}\n`;
-  const subject = "Zone feedback";
-  const cappedBody = body.length > 1800 ? body.slice(0, 1800) + "…" : body;   // mailto length guard (mirrors TUI)
-  const mailtoUrl =
-    "mailto:feedback@zonecli.dev" +
-    "?subject=" + encodeURIComponent(subject) +
-    "&body=" + encodeURIComponent(cappedBody);
-  void vscode.env.openExternal(vscode.Uri.parse(mailtoUrl));   // opens default mail client
-  void vscode.env.clipboard.writeText(body);                   // fallback: full body on clipboard
-  void vscode.window.showInformationMessage("Feedback draft opened (copied to clipboard).");
+  const repoPath = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath ?? process.cwd();
+
+  const { markdown, githubIssueUrl, mailtoUrl } = await buildFeedbackReport({
+    repoPath,
+    sessionId: currentSessionId ?? "",
+    runId: currentRunId ?? "",
+    userMessage,
+    version,
+    platform: process.platform,
+    repoSlug: "BedreddinErkan/zone-vsextension",
+  });
+
+  void vscode.env.clipboard.writeText(markdown);
+  void vscode.env.openExternal(vscode.Uri.parse(githubIssueUrl));
+
+  const pick = await vscode.window.showInformationMessage(
+    "Feedback report copied — opening a pre-filled GitHub issue.",
+    "Email instead"
+  );
+  if (pick === "Email instead") {
+    void vscode.env.openExternal(vscode.Uri.parse(mailtoUrl));
+  }
 }
 
 async function performUndo(
